@@ -5,17 +5,19 @@
 One live SDK Run has one owner process and one event-pump consumer.
 
 ```
-HTTP /v1/messages | /v1/chat/completions
-  -> protocol parse (Chat converts to canonical ParsedMessages)
+HTTP /v1/messages | /v1/chat/completions | /v1/responses
+  -> protocol parse (Chat/Responses convert to canonical ParsedMessages)
   -> RunCoordinator
        -> SessionRegistry (fingerprint, model, tool_use_id, TTL)
        -> ToolBridge (request tools -> local.customTools)
        -> EventPump (single run.stream() consumer for tool/status/terminal)
-       -> protocol writer seam (Anthropic SSE or OpenAI data chunks)
+       -> protocol writer seam (Anthropic SSE, OpenAI Chat data chunks, or Responses events)
        -> SdkRuntime (injected; production adapter wraps @cursor/sdk)
 ```
 
-`/v1/chat/completions` does not own a second session or continuation engine. It reuses the same RunCoordinator, pending-tool Map, replay, and identity binding. Only the request parser and HTTP writer differ. `/v1/responses` is not implemented.
+`/v1/chat/completions` and `/v1/responses` do not own a second session or continuation engine. They reuse the same RunCoordinator, pending-tool Map, replay, and identity binding. Only the request parser and HTTP writer differ.
+
+Responses continuation is not `previous_response_id` reconstruction. Pending tool turns resume when the latest input items are only `function_call_output` and `call_id` matches the live `tool_use_id`. Completed follow-up still uses `x-cursor-session-id` exactly as Messages/Chat. `previous_response_id`, `store=true`, background, conversation, include expansions, and hosted built-in tools fail closed.
 
 Text/thinking streaming uses official `SendOptions.onDelta` (`text-delta` / `thinking-delta`). Early deltas that arrive before `send()` resolves are buffered, then ingested into the pump. When onDelta is active, `run.stream()` assistant/thinking snapshots are not forwarded again.
 

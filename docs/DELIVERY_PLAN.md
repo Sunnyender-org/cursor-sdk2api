@@ -143,6 +143,8 @@ Claude Code / OpenCode / Codex / SDK / curl
 | `GET /v1/models` | required | live Cursor catalog with stable public model IDs and exposed params |
 | `GET /v1/account` | required | authenticated identity plus capability-based spending/limit fields |
 | `POST /v1/messages` | required | Anthropic-compatible stream and non-stream text/tool contract |
+| `POST /v1/chat/completions` | required | OpenAI Chat adapter over the same Messages run engine |
+| `POST /v1/responses` | required | OpenAI Responses adapter over the same Messages run engine. Tool continuation is `function_call_output.call_id`; completed follow-up is `x-cursor-session-id`. `previous_response_id` is rejected. |
 
 ### 7.2 Health Shape
 
@@ -157,6 +159,8 @@ Health returns at least:
   "runtime": "local",
   "capabilities": {
     "messages": true,
+    "chat_completions": true,
+    "responses": true,
     "streaming": true,
     "thinking": true,
     "images": true,
@@ -546,8 +550,8 @@ Gate:
 | Hard restart behavior is explicit | real-smoke | kill/restart pending tool test | passed-live | All four required models returned `cursor_session_lost`, never empty success |
 | Docker image starts independently | local | Docker build/run, HEALTHCHECK and health readback | passed-local | Clean-checkout rebuild remains a release gate; no external bind mount |
 | Claude Code Fable 5 passes | real-smoke | isolated real client transcript receipt | passed-live | No raw prompts/tool results retained |
-| OpenAI Chat compatibility passes | real-smoke | v0.2 client matrix | pending | Not a v0.1 release gate |
-| OpenAI Responses compatibility passes | real-smoke | v0.2 Codex/OpenCode matrix | pending | Not a v0.1 release gate |
+| OpenAI Chat compatibility passes | real-smoke | v0.2 client matrix | pending | Local Chat contract suite exists; live Chat matrix is not claimed |
+| OpenAI Responses compatibility passes | real-smoke | v0.2 Codex/OpenCode matrix | pending | Local Responses contract suite exists; live Codex/OpenCode is not claimed and is not substituted by curl fixtures |
 | new-api optional channel passes upstream checks | dev | upstream targeted/full tests and PR review | pending | Phase 4 only |
 
 ## 19. Live Model Matrix
@@ -671,6 +675,6 @@ Each step must extend the same vertical path; do not build OpenAI translators be
 
 ## 25. Current Delivery Gate
 
-截至 2026-08-15，Sonnet 4.6 与 Fable 5 已通过宿主机完整 18-case 验收，包含并行工具、缓存读写、completed resume 和 Fable Claude Code shape；Node 22 不可变镜像已用成功/死代理对照证明 Agent 与 fetch 两条 SDK 数据通路均受代理控制，并完成真实 Claude 文本与工具调用。Fable 容器 parallel/upstream 仍有非确定性，因此没有被包装成全绿容器矩阵。Composer 2.5 已通过完整 v0.1 live matrix；Grok 4.6 xhigh 除同轮 parallel 选择可重复性外均通过。下一道模型技术 gate 是定义 parallel repeatability threshold；npm/GHCR 发布、生产部署和 upstream PR 仍是独立后续步骤。
+截至 2026-08-15，Sonnet 4.6 与 Fable 5 已通过宿主机完整 18-case 验收，包含并行工具、缓存读写、completed resume 和 Fable Claude Code shape；Node 22 不可变镜像已用成功/死代理对照证明 Agent 与 fetch 两条 SDK 数据通路均受代理控制，并完成真实 Claude 文本与工具调用。Fable 容器 parallel/upstream 仍有非确定性，因此没有被包装成全绿容器矩阵。Composer 2.5 已通过完整 v0.1 live matrix；Grok 4.6 xhigh 除同轮 parallel 选择可重复性外均通过。`/v1/responses` 已有本地 contract 测试（文本、SSE 生命周期、reasoning、图片、function tools、并行、`function_call_output` 续轮、replay、usage、fail-closed 错误），不是 Codex/OpenCode live smoke。下一道模型技术 gate 是定义 parallel repeatability threshold；npm/GHCR 发布、生产部署和 upstream PR 仍是独立后续步骤。
 
 协议范围、credential modes、默认工具权限、公开许可、repository ownership 或 release path 的实质变化，应在本路线图中明确记录。

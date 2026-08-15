@@ -6,7 +6,7 @@ Independent MIT gateway that exposes the official Cursor TypeScript SDK (`@curso
 
 This is **not** an official Cursor or Anysphere product. It does not reverse private Cursor transports, cookies, Desktop/CLI stores, or IDE sessions. The only Cursor execution engine is the published `@cursor/sdk` package. Users must supply a legally obtained Cursor API key and comply with Cursor Terms of Service.
 
-**v0.1 is Anthropic Messages-first.** `/v1/chat/completions` is implemented as a protocol adapter over that same run engine (contract-tested, not live-model certified). `/v1/responses` is not implemented.
+**v0.1 is Anthropic Messages-first.** `/v1/chat/completions` and `/v1/responses` are protocol adapters over that same run engine (contract-tested, not live-model certified).
 
 ## What v0.1 includes
 
@@ -18,6 +18,7 @@ This is **not** an official Cursor or Anysphere product. It does not reverse pri
 | `GET` | `/v1/account` | required | Identity from `Cursor.me()`. Spending and limits appear only when the official surface returns them. |
 | `POST` | `/v1/messages` | required | Anthropic Messages text, SSE, client tools, same-turn parallel tools, multi-round continuation, and in-process replay. |
 | `POST` | `/v1/chat/completions` | required | OpenAI Chat Completions adapter: text, `data:` SSE + `[DONE]`, function tools, continuation, `reasoning_content`, base64 `image_url`. Same session/run engine as Messages. |
+| `POST` | `/v1/responses` | required | OpenAI Responses adapter: `input` string or items, Responses SSE + `response.completed`, reasoning, base64 `input_image`, `type=function` tools, `function_call_output` continuation by `call_id`. Same session/run engine as Messages. `previous_response_id` / hosted tools / `store=true` fail closed. Console playground stays Messages/Chat. |
 
 Default **API Compatibility Profile**:
 
@@ -124,6 +125,19 @@ curl -s localhost:8080/v1/chat/completions \
 
 `n` must be `1` or omitted. Remote `image_url` URLs are rejected (`422`); send a base64 data URL. Stream frames are OpenAI `data:` chunks with a blank line after each frame (no Anthropic event names) and end with `data: [DONE]`. `stream_options.include_usage=true` adds a `choices=[]` usage chunk before `[DONE]`.
 
+`/v1/responses` uses the same run engine. Completed follow-up still takes `x-cursor-session-id`. Pending tools resume only when the latest `input` items are `function_call_output` and `call_id` matches the live tool id. `previous_response_id` is rejected; this is not a stateless OpenAI store.
+
+```bash
+curl -s localhost:8080/v1/responses \
+  -H "Authorization: Bearer $CURSOR_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"composer-2.5","input":"hello"}'
+```
+
+Stream events use Responses names (`response.created` … `response.completed`). On error the stream emits a Responses `error` event and does not emit `response.completed`. Hosted tools, `store=true`, background, conversation, and include expansions fail closed.
+
+`function_call_output.output` accepts a string or an array of text content parts. Image/file tool-output parts fail closed with `422` until they can be mapped to the SDK without semantic loss.
+
 Keep the public catalog model ID unchanged. For Grok 4.6 xhigh:
 
 ```json
@@ -158,7 +172,7 @@ Tool continuation uses the same process-local Agent/Run. The latest user turn mu
 }
 ```
 
-For `/v1/messages`, `max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. `temperature`, `top_p`, `stop_sequences`, and `tool_choice` are accepted but **not mapped** to `@cursor/sdk`. For `/v1/chat/completions`, `tool_choice` must be `auto` or omitted; other values fail closed with `422`.
+For `/v1/messages`, `max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. `temperature`, `top_p`, `stop_sequences`, and `tool_choice` are accepted but **not mapped** to `@cursor/sdk`. For `/v1/chat/completions` and `/v1/responses`, `tool_choice` must be `auto` or omitted; other values fail closed with `422`.
 
 Errors:
 
@@ -217,7 +231,7 @@ Development defaults: 4 global active runs, 2 per credential, 30 minute session 
 
 ## Status and evidence
 
-v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions is a contract-tested protocol adapter on that engine. It is not a live-model acceptance claim.
+v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions and Responses are contract-tested protocol adapters on that engine. They are not live-model acceptance claims. The Operator Console playground stays on Messages/Chat; Responses is exercised through `/v1/responses` contract tests, not the console UI.
 
 A sanitized, non-secret acceptance summary is in [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md). That receipt is a dated local sample, not a guarantee for every credential, region, or image:
 
@@ -239,7 +253,7 @@ Thinking and image blocks are implemented and contract-tested. Live thinking/ima
 
 Not implemented:
 
-- OpenAI Responses (`/v1/responses`)
+- Responses `previous_response_id` reconstruction, `store=true`, background mode, conversation objects, include expansions, or hosted built-in tools (`web_search`, `file_search`, `computer`, `shell`, `apply_patch`)
 - Cursor Agent Profile (`/v1/agents`, native shell/edit, plan mode)
 - distributed session ownership / Redis / Postgres
 

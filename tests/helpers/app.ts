@@ -126,6 +126,19 @@ export function openaiWeatherTool() {
   };
 }
 
+export function responsesWeatherTool() {
+  return {
+    type: "function" as const,
+    name: "lookup",
+    description: "Look something up",
+    parameters: {
+      type: "object",
+      properties: { q: { type: "string" } },
+      required: ["q"],
+    },
+  };
+}
+
 export function parseChatSse(text: string): Array<Record<string, unknown> | "[DONE]"> {
   const frames: Array<Record<string, unknown> | "[DONE]"> = [];
   for (const chunk of text.split("\n\n")) {

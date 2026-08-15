@@ -6,7 +6,7 @@
 
 这不是 Cursor / Anysphere 官方产品。它不逆向私有 Cursor 传输、Cookie、Desktop/CLI 凭据库或 IDE 会话。唯一的 Cursor 执行引擎是公开发布的 `@cursor/sdk`。使用者必须提供合法获得的 Cursor API Key，并遵守 Cursor 服务条款。
 
-**v0.1 以 Anthropic Messages 为先。** `/v1/chat/completions` 是同一套 Run 引擎上的协议适配层（已有 contract 测试，不是真实模型验收声明）。`/v1/responses` 尚未实现。
+**v0.1 以 Anthropic Messages 为先。** `/v1/chat/completions` 和 `/v1/responses` 都是同一套 Run 引擎上的协议适配层（已有 contract 测试，不是真实模型验收声明）。
 
 ## v0.1 包含什么
 
@@ -18,6 +18,7 @@
 | `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`。花费和额度字段仅在官方接口真正返回时出现。 |
 | `POST` | `/v1/messages` | 需要 | Anthropic Messages 文本、SSE、客户端工具、同轮并行工具、多轮 continuation，以及进程内 replay。 |
 | `POST` | `/v1/chat/completions` | 需要 | OpenAI Chat Completions 适配：文本、`data:` SSE + `[DONE]`、function tools、continuation、`reasoning_content`、base64 `image_url`。与 Messages 共用同一套 session/run 引擎。 |
+| `POST` | `/v1/responses` | 需要 | OpenAI Responses 适配：`input` 字符串或 item、Responses SSE + `response.completed`、reasoning、base64 `input_image`、`type=function` 工具、按 `call_id` 续轮 `function_call_output`。与 Messages 共用同一套 session/run 引擎。`previous_response_id` / 托管工具 / `store=true` 会 fail closed。控制台 playground 仍只有 Messages/Chat。 |
 
 默认 **API Compatibility Profile**：
 
@@ -123,6 +124,19 @@ curl -s localhost:8080/v1/chat/completions \
 
 `n` 只能是 `1` 或省略。远程 `image_url` 会被 `422` 拒绝，需要 base64 data URL。流式帧是 OpenAI `data:` chunk（每帧后空一行，没有 Anthropic event 名），并以 `data: [DONE]` 结束。`stream_options.include_usage=true` 会在 `[DONE]` 前多发一个 `choices=[]` 的 usage chunk。
 
+`/v1/responses` 使用同一套 Run 引擎。已完成 follow-up 仍走 `x-cursor-session-id`。pending 工具续轮只接受最新 `input` 全是 `function_call_output`，并且 `call_id` 对上当前 live tool id。`previous_response_id` 会被拒绝；这不是无状态的 OpenAI store。
+
+```bash
+curl -s localhost:8080/v1/responses \
+  -H "Authorization: Bearer $CURSOR_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"composer-2.5","input":"hello"}'
+```
+
+流式事件使用 Responses 事件名（`response.created` … `response.completed`）。出错时发 Responses `error` 事件，不会发假的 `response.completed`。托管工具、`store=true`、background、conversation 和 include 展开会 fail closed。
+
+`function_call_output.output` 接受字符串或文本 content part 数组。图片/文件型工具结果在能够无损映射到 SDK 前会以 `422` fail closed，不会静默转成 JSON 文本。
+
 保持公开目录中的模型 ID 不变。例如 Grok 4.6 xhigh：
 
 ```json
@@ -157,7 +171,7 @@ curl -s localhost:8080/v1/chat/completions \
 }
 ```
 
-对于 `/v1/messages`，`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。`temperature`、`top_p`、`stop_sequences` 和 `tool_choice` 会被接受，但 **不会映射** 到 `@cursor/sdk`。对于 `/v1/chat/completions`，`tool_choice` 只能是 `auto` 或省略；其他值会以 `422` fail closed。
+对于 `/v1/messages`，`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。`temperature`、`top_p`、`stop_sequences` 和 `tool_choice` 会被接受，但 **不会映射** 到 `@cursor/sdk`。对于 `/v1/chat/completions` 和 `/v1/responses`，`tool_choice` 只能是 `auto` 或省略；其他值会以 `422` fail closed。
 
 错误体：
 
@@ -216,7 +230,7 @@ BYOK 凭据共享进程容量上限，但官方 SDK store 和空 workspace 按 c
 
 ## 现状与证据
 
-v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。
+v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 和 Responses 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。运维控制台 playground 仍只覆盖 Messages/Chat；Responses 通过 `/v1/responses` 的 contract 测试验收，不走控制台 UI。
 
 脱敏、不含秘密的验收摘要见 [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md)。这份 receipt 是有日期的本地样本，不能保证每个凭据、地区或镜像都一样：
 
@@ -238,7 +252,7 @@ thinking 和 image 块已实现并有 contract 测试。真实模型上的 think
 
 尚未实现：
 
-- OpenAI Responses（`/v1/responses`）
+- Responses 的 `previous_response_id` 重建、`store=true`、background、conversation、include 展开，以及托管内置工具（`web_search`、`file_search`、`computer`、`shell`、`apply_patch`）
 - Cursor Agent Profile（`/v1/agents`、原生 shell/edit、plan mode）
 - 分布式 session 归属 / Redis / Postgres
 

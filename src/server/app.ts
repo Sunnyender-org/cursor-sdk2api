@@ -15,6 +15,9 @@ import { writeSseError } from "../protocols/anthropic/sse.js";
 import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
 import { writeChatStreamError } from "../protocols/openai-chat/sse.js";
 import { createChatWriterFactory } from "../protocols/openai-chat/writer.js";
+import { parseResponsesRequest } from "../protocols/openai-responses/parse.js";
+import { writeResponsesStreamError } from "../protocols/openai-responses/sse.js";
+import { createResponsesWriterFactory } from "../protocols/openai-responses/writer.js";
 import type { SdkRuntime } from "../sdk/port.js";
 import { ModelCatalog } from "../sdk/catalog.js";
 import { headerValue, readJsonBody, requestPath, sendError, sendJson, sendOpenAIError } from "./http-util.js";
@@ -114,6 +117,7 @@ export function createApp(input: {
             verification: {
               live_smoke: false,
               chat_completions: "contract_tested_unverified_live",
+              responses: "contract_tested_unverified_live",
               streaming: "sdk_onDelta",
               thinking: "implemented_unverified_live",
               images: "implemented_unverified_live",
@@ -187,6 +191,24 @@ export function createApp(input: {
         return;
       }
 
+      if (method === "POST" && path === "/v1/responses") {
+        const auth = authenticate(req, config);
+        const body = await readJsonBody(req, config.maxBodyBytes);
+        if (body === undefined) throw invalidRequest("JSON body is required");
+        const responses = parseResponsesRequest(body);
+        const sessionHint = headerValue(req, "x-cursor-session-id");
+        await coordinator.handleMessages(
+          req,
+          res,
+          auth,
+          responses.parsed,
+          requestId,
+          sessionHint,
+          createResponsesWriterFactory(),
+        );
+        return;
+      }
+
       throw notFound(`No route for ${method} ${path}`);
     } catch (error) {
       logger.warn(
@@ -202,11 +224,12 @@ export function createApp(input: {
       if (res.writableEnded || res.destroyed) return;
       if (res.headersSent) {
         if (path === "/v1/chat/completions") writeChatStreamError(res, error, requestId);
+        else if (path === "/v1/responses") writeResponsesStreamError(res, error, requestId);
         else writeSseError(res, toPublicErrorBody(error, requestId));
         res.end();
         return;
       }
-      if (path === "/v1/chat/completions") sendOpenAIError(res, error, requestId);
+      if (path === "/v1/chat/completions" || path === "/v1/responses") sendOpenAIError(res, error, requestId);
       else sendError(res, error, requestId);
     }
   };
