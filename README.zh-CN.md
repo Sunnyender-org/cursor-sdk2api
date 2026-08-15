@@ -2,20 +2,22 @@
 
 [English](README.md)
 
-独立 MIT 网关：把官方 Cursor TypeScript SDK（`@cursor/sdk`）暴露成 Anthropic 兼容 HTTP API。
+独立 MIT 网关：把官方 Cursor TypeScript SDK（`@cursor/sdk`）暴露成 Anthropic 与 OpenAI 兼容 HTTP API。
 
 这不是 Cursor / Anysphere 官方产品。它不逆向私有 Cursor 传输、Cookie、Desktop/CLI 凭据库或 IDE 会话。唯一的 Cursor 执行引擎是公开发布的 `@cursor/sdk`。使用者必须提供合法获得的 Cursor API Key，并遵守 Cursor 服务条款。
 
-**v0.1 以 Anthropic Messages 为先。** OpenAI Chat Completions 与 Responses 计划在 v0.2。
+**v0.1 以 Anthropic Messages 为先。** `/v1/chat/completions` 是同一套 Run 引擎上的协议适配层（已有 contract 测试，不是真实模型验收声明）。`/v1/responses` 尚未实现。
 
 ## v0.1 包含什么
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
+| `GET` | `/console/` | 页面加载无需 | 可选 BF Labs 运维控制台。页面发起 API 请求仍需 key，且只保存在当前标签页的 React 内存中。 |
 | `GET` | `/health` | 无 | 构建版本、SDK 版本、就绪状态、**已实现**能力位、网络传输模式，以及独立的 `verification` 对象。能力位为 `true` 只表示网关实现了该路径，不是真实模型验收声明。`/health` 不含账号数据、密钥或代理 URL。 |
 | `GET` | `/v1/models` | 需要 | 实时 `Cursor.models.list()` 目录，保留精确公开模型 ID。不可用时返回空列表并给出明确 reason。 |
 | `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`。花费和额度字段仅在官方接口真正返回时出现。 |
 | `POST` | `/v1/messages` | 需要 | Anthropic Messages 文本、SSE、客户端工具、同轮并行工具、多轮 continuation，以及进程内 replay。 |
+| `POST` | `/v1/chat/completions` | 需要 | OpenAI Chat Completions 适配：文本、`data:` SSE + `[DONE]`、function tools、continuation、`reasoning_content`、base64 `image_url`。与 Messages 共用同一套 session/run 引擎。 |
 
 默认 **API Compatibility Profile**：
 
@@ -34,6 +36,9 @@ npm run build
 export AUTH_MODE=byok
 node dist/index.js
 ```
+
+打开 `http://localhost:8080/console/` 使用可选运维控制台。Health 无需 key；
+模型、账号和协议测试请求使用只存在于页面内存中的 key，刷新或关闭标签页后即清除。
 
 ```bash
 curl -s localhost:8080/health
@@ -107,6 +112,17 @@ curl -s localhost:8080/v1/messages \
   -d '{"model":"composer-2.5","max_tokens":64,"messages":[{"role":"user","content":"continue"}]}'
 ```
 
+Chat Completions 使用同一个 session header。非流式响应会返回 `cursor_session_id` 和 `x-cursor-session-id`。末尾的 `role:tool` 消息会继续同一个 pending SDK run：
+
+```bash
+curl -s localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $CURSOR_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"composer-2.5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+`n` 只能是 `1` 或省略。远程 `image_url` 会被 `422` 拒绝，需要 base64 data URL。流式帧是 OpenAI `data:` chunk（每帧后空一行，没有 Anthropic event 名），并以 `data: [DONE]` 结束。`stream_options.include_usage=true` 会在 `[DONE]` 前多发一个 `choices=[]` 的 usage chunk。
+
 保持公开目录中的模型 ID 不变。例如 Grok 4.6 xhigh：
 
 ```json
@@ -141,7 +157,7 @@ curl -s localhost:8080/v1/messages \
 }
 ```
 
-`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。`temperature`、`top_p`、`stop_sequences` 和 `tool_choice` 不会被拒绝，但 **不会映射** 到 `@cursor/sdk`。
+对于 `/v1/messages`，`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。`temperature`、`top_p`、`stop_sequences` 和 `tool_choice` 会被接受，但 **不会映射** 到 `@cursor/sdk`。对于 `/v1/chat/completions`，`tool_choice` 只能是 `auto` 或省略；其他值会以 `422` fail closed。
 
 错误体：
 
@@ -200,7 +216,7 @@ BYOK 凭据共享进程容量上限，但官方 SDK store 和空 workspace 按 c
 
 ## 现状与证据
 
-v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。
+v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。
 
 脱敏、不含秘密的验收摘要见 [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md)。这份 receipt 是有日期的本地样本，不能保证每个凭据、地区或镜像都一样：
 
@@ -220,9 +236,9 @@ thinking 和 image 块已实现并有 contract 测试。真实模型上的 think
 - 进行中工具轮的硬崩溃恢复是 `cursor_session_lost`，不是高可用。
 - 带凭据的真实模型测试需要显式启用，不属于默认 CI。
 
-v0.1 不包含：
+尚未实现：
 
-- OpenAI Chat Completions 与 Responses（计划见 [v0.2](docs/DELIVERY_PLAN.md)）
+- OpenAI Responses（`/v1/responses`）
 - Cursor Agent Profile（`/v1/agents`、原生 shell/edit、plan mode）
 - 分布式 session 归属 / Redis / Postgres
 
@@ -234,6 +250,9 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+`npm run dev` 会先构建一次控制台再启动网关。只调试 UI 时可运行
+`npm run dev:web`；只有开发者明确配置代理时，Vite 才会把 API 请求转发到网关。
 
 测试注入确定性 fake SDK，从不读取真实 Cursor 凭据。GitHub Actions CI 见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)，会跑 typecheck、测试、构建和 `docker build`。
 

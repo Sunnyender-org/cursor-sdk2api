@@ -10,6 +10,10 @@
 
 The API Compatibility Profile does not grant Cursor ambient filesystem or shell tools. Workspace is an empty directory owned by this process. `settingSources` is empty.
 
+## Operator console
+
+`/console/` is an unauthenticated static UI served by the same process as the API. Keys remain in React memory only and are not stored in browser storage, cookies, URLs, or server configuration. Do not publish port `8080` without TLS and an authentication proxy. If `CONSOLE_DIR` is overridden, keep it pointed at a dedicated, trusted build tree rather than a writable or shared directory.
+
 ## Logging
 
 Default structured logs may include request id, model id, stream flag, status, pending count, and final numeric usage. They must not include API keys, cookies, prompts, thinking, tool schemas, tool arguments, or tool results.

@@ -12,6 +12,7 @@ test("health reports runtime capability truth without account data", async () =>
     config: {
       capabilities: {
         messages: true,
+        chat_completions: true,
         streaming: true,
         thinking: true,
         images: true,
@@ -47,6 +48,7 @@ test("health reports runtime capability truth without account data", async () =>
   });
   expect(body.capabilities).toMatchObject({
     messages: true,
+    chat_completions: true,
     streaming: true,
     thinking: true,
     images: true,
@@ -63,6 +65,7 @@ test("health reports runtime capability truth without account data", async () =>
     thinking: "implemented_unverified_live",
     images: "implemented_unverified_live",
     parallel_tools: "implemented_unverified_live",
+    chat_completions: "contract_tested_unverified_live",
   });
   expect(body.verification).not.toHaveProperty("contract_tests");
   expect(JSON.stringify(body)).not.toContain("spending");
@@ -74,6 +77,7 @@ test("health capabilities follow runtime config, not marketing constants", async
     config: {
       capabilities: {
         messages: true,
+        chat_completions: false,
         streaming: false,
         thinking: false,
         images: false,

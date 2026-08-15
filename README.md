@@ -2,20 +2,22 @@
 
 [简体中文](README.zh-CN.md)
 
-Independent MIT gateway that exposes the official Cursor TypeScript SDK (`@cursor/sdk`) as Anthropic-compatible HTTP APIs.
+Independent MIT gateway that exposes the official Cursor TypeScript SDK (`@cursor/sdk`) as Anthropic- and OpenAI-compatible HTTP APIs.
 
 This is **not** an official Cursor or Anysphere product. It does not reverse private Cursor transports, cookies, Desktop/CLI stores, or IDE sessions. The only Cursor execution engine is the published `@cursor/sdk` package. Users must supply a legally obtained Cursor API key and comply with Cursor Terms of Service.
 
-**v0.1 is Anthropic Messages-first.** OpenAI Chat Completions and Responses are planned for v0.2.
+**v0.1 is Anthropic Messages-first.** `/v1/chat/completions` is implemented as a protocol adapter over that same run engine (contract-tested, not live-model certified). `/v1/responses` is not implemented.
 
 ## What v0.1 includes
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
+| `GET` | `/console/` | none to load | Optional BF Labs Operator Console. API calls from the page still require a key, which stays in the current browser tab's React memory only. |
 | `GET` | `/health` | none | Build, SDK version, readiness, **implemented** capability bits, network transport modes, and a separate `verification` object. Capability `true` means the gateway implements the path; it is not a live-model acceptance claim. `/health` never includes account data, keys, or proxy URLs. |
 | `GET` | `/v1/models` | required | Live `Cursor.models.list()` catalog with exact public IDs. Empty list plus an explicit reason when unavailable. |
 | `GET` | `/v1/account` | required | Identity from `Cursor.me()`. Spending and limits appear only when the official surface returns them. |
 | `POST` | `/v1/messages` | required | Anthropic Messages text, SSE, client tools, same-turn parallel tools, multi-round continuation, and in-process replay. |
+| `POST` | `/v1/chat/completions` | required | OpenAI Chat Completions adapter: text, `data:` SSE + `[DONE]`, function tools, continuation, `reasoning_content`, base64 `image_url`. Same session/run engine as Messages. |
 
 Default **API Compatibility Profile**:
 
@@ -34,6 +36,10 @@ npm run build
 export AUTH_MODE=byok
 node dist/index.js
 ```
+
+Open `http://localhost:8080/console/` for the optional Operator Console. It reads
+health without a key, then uses a key held only in page memory for model, account,
+and playground requests. Reloading or closing the tab clears it.
 
 ```bash
 curl -s localhost:8080/health
@@ -107,6 +113,17 @@ curl -s localhost:8080/v1/messages \
   -d '{"model":"composer-2.5","max_tokens":64,"messages":[{"role":"user","content":"continue"}]}'
 ```
 
+Chat Completions uses the same session header. Non-stream returns `cursor_session_id` and `x-cursor-session-id`. Trailing `role:tool` messages continue the pending SDK run:
+
+```bash
+curl -s localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $CURSOR_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"composer-2.5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+`n` must be `1` or omitted. Remote `image_url` URLs are rejected (`422`); send a base64 data URL. Stream frames are OpenAI `data:` chunks with a blank line after each frame (no Anthropic event names) and end with `data: [DONE]`. `stream_options.include_usage=true` adds a `choices=[]` usage chunk before `[DONE]`.
+
 Keep the public catalog model ID unchanged. For Grok 4.6 xhigh:
 
 ```json
@@ -141,7 +158,7 @@ Tool continuation uses the same process-local Agent/Run. The latest user turn mu
 }
 ```
 
-`max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. `temperature`, `top_p`, `stop_sequences`, and `tool_choice` are not rejected, but they are **not mapped** to `@cursor/sdk`.
+For `/v1/messages`, `max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. `temperature`, `top_p`, `stop_sequences`, and `tool_choice` are accepted but **not mapped** to `@cursor/sdk`. For `/v1/chat/completions`, `tool_choice` must be `auto` or omitted; other values fail closed with `422`.
 
 Errors:
 
@@ -200,7 +217,7 @@ Development defaults: 4 global active runs, 2 per credential, 30 minute session 
 
 ## Status and evidence
 
-v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart.
+v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions is a contract-tested protocol adapter on that engine. It is not a live-model acceptance claim.
 
 A sanitized, non-secret acceptance summary is in [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md). That receipt is a dated local sample, not a guarantee for every credential, region, or image:
 
@@ -220,9 +237,9 @@ Thinking and image blocks are implemented and contract-tested. Live thinking/ima
 - Hard crash recovery of an in-flight tool turn is `cursor_session_lost`, not HA.
 - Credentialed live-model tests are opt-in and are not part of default CI.
 
-Not in v0.1:
+Not implemented:
 
-- OpenAI Chat Completions and Responses (planned [v0.2](docs/DELIVERY_PLAN.md))
+- OpenAI Responses (`/v1/responses`)
 - Cursor Agent Profile (`/v1/agents`, native shell/edit, plan mode)
 - distributed session ownership / Redis / Postgres
 
@@ -234,6 +251,10 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+`npm run dev` builds the console once and starts the gateway. For isolated UI
+iteration, run `npm run dev:web`; Vite serves the frontend while API requests can
+be proxied only when explicitly configured by the developer.
 
 Tests inject a deterministic fake SDK. They never read real Cursor credentials. GitHub Actions CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs typecheck, tests, build, and `docker build`.
 

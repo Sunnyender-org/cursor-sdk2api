@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY web ./web
 RUN npm ci && npm run build
 
 FROM node:22.19-bookworm-slim

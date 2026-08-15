@@ -19,6 +19,13 @@ This project is not affiliated with, endorsed by, or sponsored by Anysphere, Inc
 
 Dev-only packages (TypeScript, Vitest, tsx, `@types/node`) are not shipped in the runtime image except as needed to compile.
 
+## BF Labs UI source components
+
+The optional Operator Console includes selected source components and design tokens from
+BF Labs UI, Copyright (c) 2026 BF Labs, used under the MIT License. The copied surface is
+maintained in this repository so the standalone gateway does not require a private package
+registry at runtime or build time.
+
 ## Known production audit findings (2026-08-15)
 
 `npm audit --omit=dev` on `@cursor/sdk@1.0.28`:

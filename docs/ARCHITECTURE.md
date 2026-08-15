@@ -5,13 +5,17 @@
 One live SDK Run has one owner process and one event-pump consumer.
 
 ```
-HTTP /v1/messages
+HTTP /v1/messages | /v1/chat/completions
+  -> protocol parse (Chat converts to canonical ParsedMessages)
   -> RunCoordinator
        -> SessionRegistry (fingerprint, model, tool_use_id, TTL)
        -> ToolBridge (request tools -> local.customTools)
        -> EventPump (single run.stream() consumer for tool/status/terminal)
+       -> protocol writer seam (Anthropic SSE or OpenAI data chunks)
        -> SdkRuntime (injected; production adapter wraps @cursor/sdk)
 ```
+
+`/v1/chat/completions` does not own a second session or continuation engine. It reuses the same RunCoordinator, pending-tool Map, replay, and identity binding. Only the request parser and HTTP writer differ. `/v1/responses` is not implemented.
 
 Text/thinking streaming uses official `SendOptions.onDelta` (`text-delta` / `thinking-delta`). Early deltas that arrive before `send()` resolves are buffered, then ingested into the pump. When onDelta is active, `run.stream()` assistant/thinking snapshots are not forwarded again.
 

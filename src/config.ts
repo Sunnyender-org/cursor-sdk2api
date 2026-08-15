@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { instanceId } from "./ids.js";
 import { resolveOutboundProxy } from "./sdk/proxy.js";
 
@@ -27,6 +29,7 @@ export interface GatewayConfig {
   maxBodyBytes: number;
   emptyWorkspaceDir?: string;
   stateDir: string;
+  consoleDir: string;
   logLevel: string;
   proxyConfigured: boolean;
   agentTransport: "http1-proxy" | "http2-direct";
@@ -36,6 +39,7 @@ export interface GatewayConfig {
 
 export interface RuntimeCapabilities {
   messages: boolean;
+  chat_completions: boolean;
   streaming: boolean;
   thinking: boolean;
   images: boolean;
@@ -50,6 +54,7 @@ export interface RuntimeCapabilities {
 
 export const DEFAULT_CAPABILITIES: RuntimeCapabilities = {
   messages: true,
+  chat_completions: true,
   streaming: true,
   thinking: true,
   images: true,
@@ -80,6 +85,10 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
   const authMode = (process.env.AUTH_MODE === "managed" ? "managed" : "byok") as AuthMode;
   const sessionTtlMs = clamp(envInt("SESSION_TTL_MS", 30 * 60_000), 5 * 60_000, 60 * 60_000);
   const proxyConfigured = Boolean(resolveOutboundProxy(process.env));
+  const packagedConsoleDir = fileURLToPath(new URL("./console/", import.meta.url));
+  const defaultConsoleDir = existsSync(packagedConsoleDir)
+    ? packagedConsoleDir
+    : join(process.cwd(), "dist", "console");
   const config: GatewayConfig = {
     host: process.env.HOST ?? "0.0.0.0",
     port: envInt("PORT", 8080),
@@ -102,6 +111,7 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     maxBodyBytes: envInt("MAX_BODY_BYTES", 2 * 1024 * 1024),
     emptyWorkspaceDir: process.env.EMPTY_WORKSPACE_DIR || undefined,
     stateDir: process.env.STATE_DIR?.trim() || join(tmpdir(), "cursor-sdk2api", "state"),
+    consoleDir: process.env.CONSOLE_DIR?.trim() || defaultConsoleDir,
     logLevel: process.env.LOG_LEVEL ?? "info",
     proxyConfigured,
     agentTransport: proxyConfigured ? "http1-proxy" : "http2-direct",

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `/v1/chat/completions` protocol adapter over the existing Anthropic `ParsedMessages` run engine. Contract-tested text, OpenAI SSE, function tools, continuation, replay, deferred and cache-aware usage, images, and OpenAI error shapes. `/v1/responses` is not implemented.
+- Optional BF Labs Operator Console at `/console/`, bundled as static Vite assets and served by the existing Node process. It includes health, model/account reads, Messages/Chat playground, connection snippets, English/Chinese, and light/dark modes. Keys remain in page memory only.
+
 ## 0.1.0
 
 - Standard HTTP(S) `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` support for both official SDK data planes. Proxied Agent runs switch to HTTP/1.1 through `proxy-agent`; catalog/account fetches use Undici's environment dispatcher; direct runs retain HTTP/2. SOCKS/PAC fails closed. Health exposes only the boolean plus Agent/fetch transport modes.

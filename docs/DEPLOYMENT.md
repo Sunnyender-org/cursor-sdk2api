@@ -9,6 +9,16 @@ npm run build
 node dist/index.js
 ```
 
+The immutable build includes the optional BF Labs Operator Console at
+`/console/`. It is served by the same Node process from `dist/console`; no
+second production service is required. Set `CONSOLE_DIR` only when an operator
+intentionally supplies a different prebuilt static bundle.
+
+Loading the page is unauthenticated. Models, account, Messages, and Chat calls
+still use the normal gateway authentication. The bundled console keeps the key
+in React memory only and never writes browser storage, cookies, URLs, or server
+configuration.
+
 ## Docker
 
 ```bash

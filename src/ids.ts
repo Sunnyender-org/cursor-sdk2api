@@ -8,6 +8,12 @@ export function messageId(): string {
   return `msg_${randomUUID()}`;
 }
 
+export function chatCompletionId(fromMessageId?: string): string {
+  if (fromMessageId?.startsWith("msg_")) return `chatcmpl_${fromMessageId.slice(4)}`;
+  if (fromMessageId?.startsWith("chatcmpl_")) return fromMessageId;
+  return `chatcmpl_${randomUUID()}`;
+}
+
 export function sessionId(): string {
   return `ses_${randomUUID()}`;
 }

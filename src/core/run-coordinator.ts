@@ -8,31 +8,18 @@ import {
   sdkFailure,
   sessionConflict,
   sessionLost,
-  upstreamError,
 } from "../errors.js";
-import { messageId } from "../ids.js";
 import type { Logger } from "../log.js";
 import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/types.js";
 import { renderPrompt } from "../protocols/anthropic/parse.js";
-import { encodeMessage } from "../protocols/anthropic/encode.js";
-import {
-  beginSse,
-  writeBlockStop,
-  writeCompletedTurn,
-  writeMessageStart,
-  writeMessageStop,
-  writeSseError,
-  writeTextDelta,
-  writeThinkingDelta,
-  writeToolUse,
-} from "../protocols/anthropic/sse.js";
-import { sendError, sendJson } from "../server/http-util.js";
+import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
 import type { SdkDeltaUpdate, SdkRuntime } from "../sdk/port.js";
 import { EventPump, type PumpBoundary } from "./event-pump.js";
 import { Session } from "./session.js";
 import { SessionRegistry } from "./session-registry.js";
 import { batchDigest, mapClientTools } from "./tool-bridge.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
+import type { TurnWriter, TurnWriterFactory } from "./turn-writer.js";
 
 export interface CoordinatorDeps {
   config: GatewayConfig;
@@ -95,22 +82,23 @@ export class RunCoordinator {
     parsed: ParsedMessages,
     requestId: string,
     sessionHint?: string,
+    writerFactory: TurnWriterFactory = createAnthropicWriter,
   ): Promise<void> {
     this.deps.registry.sweep();
     if (parsed.continuation) {
-      await this.continueTurn(req, res, auth, parsed, parsed.continuation, requestId);
+      await this.continueTurn(req, res, auth, parsed, parsed.continuation, requestId, writerFactory);
       return;
     }
     if (sessionHint) {
       const existing = this.deps.registry.get(sessionHint);
       if (existing) {
-        await this.followUp(req, res, auth, parsed, existing, requestId);
+        await this.followUp(req, res, auth, parsed, existing, requestId, writerFactory);
         return;
       }
-      await this.resumeCompletedLineage(req, res, auth, parsed, sessionHint, requestId);
+      await this.resumeCompletedLineage(req, res, auth, parsed, sessionHint, requestId, writerFactory);
       return;
     }
-    await this.startTurn(req, res, auth, parsed, requestId);
+    await this.startTurn(req, res, auth, parsed, requestId, writerFactory);
   }
 
   private async startTurn(
@@ -119,6 +107,7 @@ export class RunCoordinator {
     auth: AuthContext,
     parsed: ParsedMessages,
     requestId: string,
+    writerFactory: TurnWriterFactory,
   ): Promise<void> {
     const session = this.deps.registry.create({
       credentialFingerprint: auth.fingerprint,
@@ -157,7 +146,7 @@ export class RunCoordinator {
       session.pump = pump;
       deltas.attach(pump);
       pump.ingestEarly(session.earlyCalls.splice(0));
-      await this.drive(req, res, session, pump, parsed.stream, requestId);
+      await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
     } catch (error) {
       if (!res.headersSent && session.state !== "awaiting_tool_results") {
         this.deps.registry.forget(session, "start_failed");
@@ -173,6 +162,7 @@ export class RunCoordinator {
     parsed: ParsedMessages,
     session: Session,
     requestId: string,
+    writerFactory: TurnWriterFactory,
   ): Promise<void> {
     this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
     if (!session.agent) {
@@ -214,7 +204,7 @@ export class RunCoordinator {
       );
       session.pump = pump;
       deltas.attach(pump);
-      await this.drive(req, res, session, pump, parsed.stream, requestId);
+      await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
     } catch (error) {
       if (!res.headersSent) this.deps.registry.forget(session, "follow_up_failed");
       throw sdkFailure(error);
@@ -228,6 +218,7 @@ export class RunCoordinator {
     parsed: ParsedMessages,
     results: ParsedToolResult[],
     requestId: string,
+    writerFactory: TurnWriterFactory,
   ): Promise<void> {
     const ids = results.map((result) => result.toolUseId);
     if (ids.length === 0) throw invalidRequest("tool_result turn is empty");
@@ -258,11 +249,11 @@ export class RunCoordinator {
       throw sessionConflict("duplicate tool_use_id with a different result digest");
     }
     if (session.lastResultDigest === digest && session.state === "completed" && session.replay) {
-      this.writeReplay(res, session, parsed.stream, requestId);
+      this.writeReplay(res, session, parsed.stream, requestId, writerFactory);
       return;
     }
     if (session.state === "resuming" && session.lastResultDigest === digest && session.pump) {
-      await this.drive(req, res, session, session.pump, parsed.stream, requestId);
+      await this.drive(req, res, session, session.pump, parsed.stream, requestId, writerFactory);
       return;
     }
 
@@ -282,7 +273,7 @@ export class RunCoordinator {
     session.state = "resuming";
     session.touch(this.deps.clock);
     // Attach the HTTP sink before resolving deferreds so second-turn deltas are not lost.
-    const drive = this.drive(req, res, session, session.pump, parsed.stream, requestId);
+    const drive = this.drive(req, res, session, session.pump, parsed.stream, requestId, writerFactory);
     for (const result of results) {
       const pending = session.pending.get(result.toolUseId);
       if (!pending || pending.resolved) {
@@ -310,8 +301,15 @@ export class RunCoordinator {
     pump: EventPump,
     stream: boolean,
     requestId: string,
+    writerFactory: TurnWriterFactory,
   ): Promise<void> {
-    const writer = new ProtocolWriter(res, stream, requestId, session);
+    const writer = writerFactory({
+      res,
+      stream,
+      requestId,
+      session,
+      messageId: pump.currentMessageId(),
+    });
     pump.attach(writer);
     pump.start();
     this.watchDisconnect(req, res, session, writer);
@@ -330,7 +328,7 @@ export class RunCoordinator {
     res: ServerResponse,
     session: Session,
     boundary: PumpBoundary,
-    writer: ProtocolWriter,
+    writer: TurnWriter,
   ): Promise<void> {
     const boundaryId = boundaryIdentity(boundary);
     const first = session.appliedBoundaryId !== boundaryId;
@@ -391,6 +389,7 @@ export class RunCoordinator {
     parsed: ParsedMessages,
     sessionHint: string,
     requestId: string,
+    writerFactory: TurnWriterFactory,
   ): Promise<void> {
     const record = this.deps.lineage?.get(sessionHint);
     if (!record || this.deps.clock.now() >= record.expiresAt) {
@@ -430,7 +429,7 @@ export class RunCoordinator {
       });
       session.agent = agent;
       session.sdkAgentId = record.sdkAgentId;
-      await this.followUp(req, res, auth, parsed, session, requestId);
+      await this.followUp(req, res, auth, parsed, session, requestId, writerFactory);
     } catch (error) {
       if (!res.headersSent) {
         this.deps.registry.forget(session, "resume_failed");
@@ -472,14 +471,23 @@ export class RunCoordinator {
     }
   }
 
-  private writeReplay(res: ServerResponse, session: Session, stream: boolean, requestId: string): void {
+  private writeReplay(
+    res: ServerResponse,
+    session: Session,
+    stream: boolean,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+  ): void {
     const turn = session.replay?.turn;
     if (!turn) throw sessionLost("Replay record is missing");
-    if (stream) {
-      writeCompletedTurn(res, turn, requestId);
-      return;
-    }
-    sendJson(res, 200, encodeMessage(turn, { replayed: true }), requestId);
+    const writer = writerFactory({
+      res,
+      stream,
+      requestId,
+      session,
+      messageId: turn.messageId,
+    });
+    writer.finish(turn, { replayed: true });
   }
 
   private assertIdentity(
@@ -506,7 +514,7 @@ export class RunCoordinator {
     req: IncomingMessage,
     res: ServerResponse,
     session: Session,
-    writer: ProtocolWriter,
+    writer: TurnWriter,
   ): void {
     const onClientGone = () => {
       session.pump?.detach(writer);
@@ -540,104 +548,5 @@ export class RunCoordinator {
         this.deps.registry.forget(session, "drain_deadline");
       }
     }
-  }
-}
-
-class ProtocolWriter {
-  private started = false;
-  private nextIndex = 0;
-  private open?: { kind: "thinking" | "text"; index: number };
-  private emitted = new Set<"thinking" | "text">();
-
-  constructor(
-    private readonly res: ServerResponse,
-    private readonly stream: boolean,
-    private readonly requestId: string,
-    private readonly session: Session,
-  ) {}
-
-  onThinking(text: string): void {
-    if (!this.stream || this.dead()) return;
-    this.ensureStart();
-    this.openBlock("thinking");
-    if (text && this.open) writeThinkingDelta(this.res, this.open.index, text, true);
-  }
-
-  onText(text: string): void {
-    if (!this.stream || this.dead()) return;
-    this.ensureStart();
-    this.openBlock("text");
-    if (text && this.open) writeTextDelta(this.res, this.open.index, text, true);
-  }
-
-  finish(turn: import("../protocols/anthropic/types.js").AssistantTurn): void {
-    if (!this.stream) {
-      if (!this.dead()) sendJson(this.res, 200, encodeMessage(turn), this.requestId);
-      return;
-    }
-    if (this.dead()) return;
-    this.ensureStart();
-    this.closeOpen();
-    for (const block of turn.blocks) {
-      if (block.type === "thinking" && !this.emitted.has("thinking")) {
-        const index = this.nextIndex++;
-        writeThinkingDelta(this.res, index, block.thinking, false);
-        writeBlockStop(this.res, index);
-        this.emitted.add("thinking");
-      } else if (block.type === "text" && !this.emitted.has("text")) {
-        const index = this.nextIndex++;
-        writeTextDelta(this.res, index, block.text, false);
-        writeBlockStop(this.res, index);
-        this.emitted.add("text");
-      } else if (block.type === "tool_use") {
-        writeToolUse(this.res, this.nextIndex++, block);
-      }
-    }
-    writeMessageStop(this.res, turn);
-    this.res.end();
-  }
-
-  fail(error: unknown): void {
-    if (this.dead()) return;
-    if (this.stream && this.res.headersSent) {
-      writeSseError(this.res, error);
-      this.res.end();
-      return;
-    }
-    sendError(this.res, error, this.requestId);
-  }
-
-  private openBlock(kind: "thinking" | "text"): void {
-    if (this.open?.kind === kind) return;
-    this.closeOpen();
-    const index = this.nextIndex++;
-    if (kind === "thinking") writeThinkingDelta(this.res, index, "", false);
-    else writeTextDelta(this.res, index, "", false);
-    this.open = { kind, index };
-    this.emitted.add(kind);
-  }
-
-  private closeOpen(): void {
-    if (!this.open || this.dead()) {
-      this.open = undefined;
-      return;
-    }
-    writeBlockStop(this.res, this.open.index);
-    this.open = undefined;
-  }
-
-  private ensureStart(): void {
-    if (this.started || this.dead()) return;
-    this.started = true;
-    beginSse(this.res, this.requestId);
-    writeMessageStart(this.res, {
-      messageId: messageId(),
-      model: this.session.modelId,
-      sessionId: this.session.sessionId,
-    });
-  }
-
-  private dead(): boolean {
-    return this.res.destroyed || this.res.writableEnded;
   }
 }

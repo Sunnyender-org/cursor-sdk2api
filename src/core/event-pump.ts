@@ -36,6 +36,7 @@ export class EventPump {
   private readonly deltaHistory: DeltaRecord[] = [];
   /** Once official onDelta is seen, ignore stream assistant/thinking snapshots. */
   private preferOnDelta = false;
+  private segmentMessageId = messageId();
 
   constructor(
     private readonly session: Session,
@@ -73,6 +74,11 @@ export class EventPump {
     this.boundaryWaiters = [];
     this.text = "";
     this.thinking = "";
+    this.segmentMessageId = messageId();
+  }
+
+  currentMessageId(): string {
+    return this.segmentMessageId;
   }
 
   notifyTool(call: PendingCall): void {
@@ -182,7 +188,7 @@ export class EventPump {
       this.publish({
         type: "final",
         turn: {
-          messageId: messageId(),
+          messageId: this.segmentMessageId,
           sessionId: this.session.sessionId,
           model: this.session.modelId,
           stopReason: "end_turn",
@@ -237,7 +243,7 @@ export class EventPump {
     this.publish({
       type: "tools",
       turn: {
-        messageId: messageId(),
+        messageId: this.segmentMessageId,
         sessionId: this.session.sessionId,
         model: this.session.modelId,
         stopReason: "tool_use",

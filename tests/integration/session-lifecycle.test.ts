@@ -217,6 +217,13 @@ test("streaming tool_result resume can disconnect and reattach the same digest",
   expect(replay.status).toBe(200);
   expect(text).toContain("HELLO");
   expect(text).toContain("WORLD");
+  const sessionId = replay.headers.get("x-cursor-session-id");
+  const storedMessageId = sessionId ? ctx.app.registry.get(sessionId)?.replay?.turn.messageId : undefined;
+  const messageStart = parseSse(text).find((event) => event.event === "message_start")?.data as
+    | { message?: { id?: string } }
+    | undefined;
+  expect(storedMessageId).toBeTruthy();
+  expect(messageStart?.message?.id).toBe(storedMessageId);
   const run = ctx.sdk.agents[0]?.runs[0];
   expect(run?.streamStarts).toBe(1);
   expect(run?.capturedToolResults).toHaveLength(1);

@@ -13,10 +13,11 @@
 - 原生 streaming、thinking、images、single/parallel tools、tool continuation、replay、usage 与 cache 字段。
 - SDK Agent 生命周期、Store、resume、取消、超时、会话排空和清晰的进程重启语义。
 - Docker-first 发布，并为 new-api 提供外部网关集成面。
+- 可选的同进程 BF Labs Operator Console，用于健康检查、模型/账号读取、连接配置与协议测试。
 
 ### Not Building
 
-- 不实现用户充值、计费、分组、渠道调度或管理后台。
+- 不实现用户充值、计费、分组、渠道调度、账号池或多租户管理后台。
 - 不逆向 Cursor 私有 H2、ConnectRPC、浏览器 Cookie 或 IDE OAuth 会话。
 - 不把 Node.js 或 `@cursor/sdk` 内嵌进 new-api 主进程。
 - 不默认开放 Cursor 的 shell、read、edit、task、web 或项目 settings。
@@ -443,6 +444,35 @@ Gate:
 Stop condition:
 
 - protocol abstraction forces lossy behavior that breaks Messages correctness；Messages remains the canonical internal contract。
+
+### Phase 2.5 — Optional BF Labs Operator Console
+
+Prerequisite:
+
+- `/health`、`/v1/models`、`/v1/account` 与至少一个推理协议已稳定；Responses 不作为控制台首个竖切前置条件。
+
+Deliverables:
+
+- 同一 Node 进程在 `/console/` 提供静态 React/Vite 控制台，不增加生产前端服务或线程。
+- 使用 vendored MIT BF Labs UI tokens/components；不依赖私有 package registry。
+- runtime overview、模型目录、官方账号 surface、Messages/Chat playground 与 Claude Code/OpenAI/new-api 配置复制。
+- 浏览器 key 只保存在当前 React 内存；不写 localStorage、sessionStorage、Cookie、URL 或服务端配置。
+- 英文默认、中文切换、light/dark、desktop 与 390px 验收。
+
+Non-goals:
+
+- 用户、充值、计费、分组、渠道池、账号池、日志 payload 浏览与网页修改 `.env`。
+- 复制 CPA/New API 的管理域或后端 API。
+
+Gate:
+
+- frontend typecheck/build、静态资源/CSP/path traversal contract tests、Docker build/run 通过。
+- 真实浏览器读取 health；使用隔离测试 key 时才能验收 models/account/playground。
+- desktop 与 390px 无横向溢出、控制台错误、密钥持久化或误导性能力声明。
+
+Stop condition:
+
+- 前端要求新增 billing/user/channel 数据模型；该需求留给上层 new-api/BeefAPI，不扩张 standalone gateway core。
 
 ### Phase 3 — v0.3 Operational Reliability
 

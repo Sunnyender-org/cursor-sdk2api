@@ -234,6 +234,7 @@ export class FakeRun implements SdkRun {
 export class FakeAgent implements SdkAgent {
   readonly agentId: string;
   readonly runs: FakeRun[] = [];
+  lastSend?: SdkSendInput;
   closed = false;
   private sendCount = 0;
 
@@ -248,6 +249,7 @@ export class FakeAgent implements SdkAgent {
   }
 
   async send(sendInput: SdkSendInput): Promise<SdkRun> {
+    this.lastSend = sendInput;
     const script = this.scripts[Math.min(this.sendCount, this.scripts.length - 1)] ?? [{ type: "text", chunks: ["ok"] }];
     this.sendCount += 1;
     const sendError = script.find((step) => step.type === "send-error");

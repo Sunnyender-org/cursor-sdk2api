@@ -45,7 +45,7 @@ export function parseMessagesRequest(body: unknown): ParsedMessages {
   };
 }
 
-function parseModelParams(raw: Record<string, unknown>): Array<{ id: string; value: string }> {
+export function parseModelParams(raw: Record<string, unknown>): Array<{ id: string; value: string }> {
   const params = new Map<string, string>();
   const explicit = raw.cursor_model_params;
   if (explicit !== undefined) {
@@ -188,7 +188,7 @@ function parseSystem(value: unknown): string {
   throw invalidRequest("system must be a string or text block array");
 }
 
-function parseContinuation(lastUser: AnthropicMessage): ParsedToolResult[] | undefined {
+export function parseContinuation(lastUser: AnthropicMessage): ParsedToolResult[] | undefined {
   const blocks = asBlocks(lastUser.content);
   const hasToolResult = blocks.some((block) => block.type === "tool_result");
   if (!hasToolResult) return undefined;
@@ -255,7 +255,7 @@ export function renderPrompt(parsed: ParsedMessages): { text: string; images: Ar
   return { text: parts.join("\n\n") || " ", images: parsed.images };
 }
 
-function collectImages(messages: AnthropicMessage[]): Array<{ data: string; mimeType: string }> {
+export function collectImages(messages: AnthropicMessage[]): Array<{ data: string; mimeType: string }> {
   const images: Array<{ data: string; mimeType: string }> = [];
   for (const message of messages) {
     for (const block of asBlocks(message.content)) {

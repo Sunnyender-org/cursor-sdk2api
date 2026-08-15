@@ -12,9 +12,13 @@ import { requestId as newRequestId } from "../ids.js";
 import type { Logger } from "../log.js";
 import { parseMessagesRequest } from "../protocols/anthropic/parse.js";
 import { writeSseError } from "../protocols/anthropic/sse.js";
+import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
+import { writeChatStreamError } from "../protocols/openai-chat/sse.js";
+import { createChatWriterFactory } from "../protocols/openai-chat/writer.js";
 import type { SdkRuntime } from "../sdk/port.js";
 import { ModelCatalog } from "../sdk/catalog.js";
-import { headerValue, readJsonBody, requestPath, sendError, sendJson } from "./http-util.js";
+import { headerValue, readJsonBody, requestPath, sendError, sendJson, sendOpenAIError } from "./http-util.js";
+import { serveConsole } from "./console.js";
 
 export interface App {
   config: GatewayConfig;
@@ -73,6 +77,13 @@ export function createApp(input: {
     const path = requestPath(req);
     const method = (req.method ?? "GET").toUpperCase();
     try {
+      if (
+        (method === "GET" || method === "HEAD") &&
+        serveConsole(res, path, requestId, config.consoleDir, method === "HEAD")
+      ) {
+        return;
+      }
+
       if (method === "GET" && path === "/health") {
         sendJson(
           res,
@@ -102,6 +113,7 @@ export function createApp(input: {
             },
             verification: {
               live_smoke: false,
+              chat_completions: "contract_tested_unverified_live",
               streaming: "sdk_onDelta",
               thinking: "implemented_unverified_live",
               images: "implemented_unverified_live",
@@ -157,6 +169,24 @@ export function createApp(input: {
         return;
       }
 
+      if (method === "POST" && path === "/v1/chat/completions") {
+        const auth = authenticate(req, config);
+        const body = await readJsonBody(req, config.maxBodyBytes);
+        if (body === undefined) throw invalidRequest("JSON body is required");
+        const chat = parseChatCompletionsRequest(body);
+        const sessionHint = headerValue(req, "x-cursor-session-id");
+        await coordinator.handleMessages(
+          req,
+          res,
+          auth,
+          chat.parsed,
+          requestId,
+          sessionHint,
+          createChatWriterFactory({ includeUsage: chat.includeUsage }),
+        );
+        return;
+      }
+
       throw notFound(`No route for ${method} ${path}`);
     } catch (error) {
       logger.warn(
@@ -169,12 +199,15 @@ export function createApp(input: {
         },
         "request failed",
       );
+      if (res.writableEnded || res.destroyed) return;
       if (res.headersSent) {
-        writeSseError(res, toPublicErrorBody(error, requestId));
+        if (path === "/v1/chat/completions") writeChatStreamError(res, error, requestId);
+        else writeSseError(res, toPublicErrorBody(error, requestId));
         res.end();
         return;
       }
-      sendError(res, error, requestId);
+      if (path === "/v1/chat/completions") sendOpenAIError(res, error, requestId);
+      else sendError(res, error, requestId);
     }
   };
 

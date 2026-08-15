@@ -91,6 +91,39 @@ export function notFound(message = "Not found"): GatewayError {
   return new GatewayError("not_found", message, 404);
 }
 
+export function openaiErrorType(code: string): string {
+  switch (code) {
+    case "invalid_request":
+    case "not_found":
+      return "invalid_request_error";
+    case "authentication_error":
+      return "authentication_error";
+    case "forbidden":
+      return "permission_error";
+    case "rate_limited":
+      return "rate_limit_error";
+    default:
+      return "api_error";
+  }
+}
+
+export function toOpenAIErrorBody(
+  error: unknown,
+  requestId: string,
+): {
+  error: { message: string; type: string; param: null; code: string };
+} {
+  const publicBody = toPublicErrorBody(error, requestId);
+  return {
+    error: {
+      message: publicBody.error.message,
+      type: openaiErrorType(publicBody.error.type),
+      param: null,
+      code: publicBody.error.type,
+    },
+  };
+}
+
 export function toPublicErrorBody(error: unknown, requestId: string): {
   type: "error";
   error: { type: string; message: string };

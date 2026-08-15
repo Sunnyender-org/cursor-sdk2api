@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { GatewayError, httpStatusOf, invalidRequest, toPublicErrorBody } from "../errors.js";
+import {
+  GatewayError,
+  httpStatusOf,
+  invalidRequest,
+  toOpenAIErrorBody,
+  toPublicErrorBody,
+} from "../errors.js";
 
 export function headerValue(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name.toLowerCase()];
@@ -34,13 +40,20 @@ export async function readJsonBody(req: IncomingMessage, maxBytes: number): Prom
   }
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown, requestId: string): void {
+export function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  requestId: string,
+  extraHeaders: Record<string, string> = {},
+): void {
   if (res.headersSent) return;
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "x-request-id": requestId,
     "cache-control": "no-store",
+    ...extraHeaders,
   });
   res.end(payload);
 }
@@ -50,8 +63,21 @@ export function sendError(res: ServerResponse, error: unknown, requestId: string
   sendJson(res, httpStatusOf(error), body, requestId);
 }
 
+export function sendOpenAIError(res: ServerResponse, error: unknown, requestId: string): void {
+  sendJson(res, httpStatusOf(error), toOpenAIErrorBody(error, requestId), requestId);
+}
+
 export function writeSse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/** OpenAI-style SSE: `data: ...\\n\\n` only, no Anthropic `event:` names. */
+export function writeDataFrame(res: ServerResponse, data: unknown | "[DONE]"): void {
+  if (data === "[DONE]") {
+    res.write("data: [DONE]\n\n");
+    return;
+  }
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 

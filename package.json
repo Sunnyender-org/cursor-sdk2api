@@ -1,7 +1,7 @@
 {
   "name": "cursor-sdk2api",
   "version": "0.1.0",
-  "description": "Independent MIT gateway that exposes official @cursor/sdk as Anthropic-compatible HTTP APIs.",
+  "description": "Independent MIT gateway that exposes official @cursor/sdk as Anthropic- and OpenAI-compatible HTTP APIs.",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -23,13 +23,18 @@
     "README.zh-CN.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:web": "vite build --config web/vite.config.ts",
+    "typecheck": "npm run typecheck:server && npm run typecheck:web",
+    "typecheck:server": "tsc -p tsconfig.json --noEmit",
+    "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node dist/index.js",
-    "dev": "node --import tsx src/index.ts",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "dev": "npm run build:web && node --import tsx src/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "lint": "npm run typecheck",
     "live:smoke": "tsx scripts/live-smoke/run.ts"
   },
   "dependencies": {
@@ -39,8 +44,13 @@
   },
   "devDependencies": {
     "@types/node": "22.18.12",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "tsx": "4.20.6",
     "typescript": "5.9.2",
+    "vite": "8.1.0",
     "vitest": "3.2.6"
   }
 }

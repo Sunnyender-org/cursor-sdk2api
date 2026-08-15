@@ -111,6 +111,36 @@ export function weatherTool() {
   };
 }
 
+export function openaiWeatherTool() {
+  return {
+    type: "function" as const,
+    function: {
+      name: "lookup",
+      description: "Look something up",
+      parameters: {
+        type: "object",
+        properties: { q: { type: "string" } },
+        required: ["q"],
+      },
+    },
+  };
+}
+
+export function parseChatSse(text: string): Array<Record<string, unknown> | "[DONE]"> {
+  const frames: Array<Record<string, unknown> | "[DONE]"> = [];
+  for (const chunk of text.split("\n\n")) {
+    if (!chunk.trim()) continue;
+    let data = "";
+    for (const line of chunk.split("\n")) {
+      if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!data) continue;
+    if (data === "[DONE]") frames.push("[DONE]");
+    else frames.push(JSON.parse(data) as Record<string, unknown>);
+  }
+  return frames;
+}
+
 export function parseSse(text: string): Array<{ event: string; data: unknown }> {
   const events: Array<{ event: string; data: unknown }> = [];
   const chunks = text.split("\n\n");

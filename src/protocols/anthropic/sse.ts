@@ -3,13 +3,14 @@ import { writeSse } from "../../server/http-util.js";
 import { encodeMessage, encodeUsage } from "./encode.js";
 import type { AnthropicContentBlock, AssistantTurn } from "./types.js";
 
-export function beginSse(res: ServerResponse, requestId: string): void {
+export function beginSse(res: ServerResponse, requestId: string, sessionId?: string): void {
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
     "x-request-id": requestId,
     "x-accel-buffering": "no",
+    ...(sessionId ? { "x-cursor-session-id": sessionId } : {}),
   });
 }
 
@@ -98,7 +99,7 @@ export function writeSseError(res: ServerResponse, body: unknown): void {
 }
 
 export function writeCompletedTurn(res: ServerResponse, turn: AssistantTurn, requestId: string): void {
-  beginSse(res, requestId);
+  beginSse(res, requestId, turn.sessionId);
   writeMessageStart(res, turn);
   let index = 0;
   for (const block of turn.blocks) {
