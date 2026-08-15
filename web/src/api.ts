@@ -1,4 +1,4 @@
-import type { AccountPayload, HealthPayload, ModelsPayload, Protocol } from "./types";
+import type { AccountPayload, HealthPayload, ModelsPayload, Protocol } from "./types.js";
 
 export async function getHealth(): Promise<HealthPayload> {
   return getJson<HealthPayload>("/health");
@@ -20,7 +20,7 @@ export async function runPrompt(input: {
   stream: boolean;
   onChunk: (value: string) => void;
 }): Promise<void> {
-  const endpoint = input.protocol === "messages" ? "/v1/messages" : "/v1/chat/completions";
+  const endpoint = protocolEndpoint(input.protocol);
   const body =
     input.protocol === "messages"
       ? {
@@ -29,12 +29,18 @@ export async function runPrompt(input: {
           stream: input.stream,
           messages: [{ role: "user", content: input.prompt }],
         }
-      : {
+      : input.protocol === "chat"
+        ? {
           model: input.model,
           stream: input.stream,
           stream_options: input.stream ? { include_usage: true } : undefined,
           messages: [{ role: "user", content: input.prompt }],
-        };
+          }
+        : {
+            model: input.model,
+            stream: input.stream,
+            input: input.prompt,
+          };
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -62,6 +68,12 @@ export async function runPrompt(input: {
   }
   output += decoder.decode();
   input.onChunk(output);
+}
+
+export function protocolEndpoint(protocol: Protocol): string {
+  if (protocol === "messages") return "/v1/messages";
+  if (protocol === "chat") return "/v1/chat/completions";
+  return "/v1/responses";
 }
 
 async function getJson<T>(path: string, apiKey?: string): Promise<T> {

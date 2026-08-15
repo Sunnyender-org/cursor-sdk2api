@@ -18,7 +18,7 @@ This is **not** an official Cursor or Anysphere product. It does not reverse pri
 | `GET` | `/v1/account` | required | Identity from `Cursor.me()`. Spending and limits appear only when the official surface returns them. |
 | `POST` | `/v1/messages` | required | Anthropic Messages text, SSE, client tools, same-turn parallel tools, multi-round continuation, and in-process replay. |
 | `POST` | `/v1/chat/completions` | required | OpenAI Chat Completions adapter: text, `data:` SSE + `[DONE]`, function tools, continuation, `reasoning_content`, base64 `image_url`. Same session/run engine as Messages. |
-| `POST` | `/v1/responses` | required | OpenAI Responses adapter: `input` string or items, Responses SSE + `response.completed`, reasoning, base64 `input_image`, `type=function` tools, `function_call_output` continuation by `call_id`. Same session/run engine as Messages. `previous_response_id` / hosted tools / `store=true` fail closed. Console playground stays Messages/Chat. |
+| `POST` | `/v1/responses` | required | OpenAI Responses adapter: `input` string or items, Responses SSE + `response.completed`, reasoning, base64 `input_image`, `type=function` tools, `function_call_output` continuation by `call_id`. Same session/run engine as Messages. `previous_response_id` / hosted tools / `store=true` fail closed. The Console playground supports Responses directly. |
 
 Default **API Compatibility Profile**:
 
@@ -231,7 +231,7 @@ Development defaults: 4 global active runs, 2 per credential, 30 minute session 
 
 ## Status and evidence
 
-v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions and Responses are contract-tested protocol adapters on that engine. They are not live-model acceptance claims. The Operator Console playground stays on Messages/Chat; Responses is exercised through `/v1/responses` contract tests, not the console UI.
+v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions and Responses are contract-tested protocol adapters on that engine. They are not live-model acceptance claims. The Operator Console playground can exercise Messages, Chat Completions, and Responses from the same prompt surface.
 
 A sanitized, non-secret acceptance summary is in [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md). That receipt is a dated local sample, not a guarantee for every credential, region, or image:
 

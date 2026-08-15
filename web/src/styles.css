@@ -103,6 +103,7 @@ h3 { font-size: 0.94rem; letter-spacing: -0.012em; }
 .section-copy { margin: 1rem 0 1.4rem; max-width: 42ch; color: var(--bf-muted); font-size: 0.86rem; line-height: 1.65; }
 .field-label { display: block; margin: 1rem 0 0.45rem; color: var(--bf-muted); font-size: 0.72rem; font-weight: 650; }
 .text-input, .prompt-input {
+  min-width: 0;
   width: 100%;
   border: 1px solid var(--bf-divider);
   border-radius: var(--bf-radius-control);
@@ -151,19 +152,20 @@ h3 { font-size: 0.94rem; letter-spacing: -0.012em; }
 .model-row strong { font-family: var(--bf-font-display); font-size: 0.84rem; }
 .model-row small { margin-top: 0.2rem; color: var(--bf-muted); font-size: 0.7rem; overflow-wrap: anywhere; }
 .model-row__params { color: var(--bf-subtle); font-size: 0.68rem; white-space: nowrap; }
-.empty-state { margin: 0; min-height: 130px; display: grid; place-items: center; border-top: 1px solid var(--bf-divider); border-bottom: 1px solid var(--bf-divider); color: var(--bf-muted); font-size: 0.8rem; }
+.empty-state { min-width: 0; margin: 0; min-height: 130px; display: grid; place-items: center; padding: 1.5rem 1rem; border-top: 1px solid var(--bf-divider); border-bottom: 1px solid var(--bf-divider); color: var(--bf-muted); font-size: 0.8rem; text-align: center; overflow-wrap: anywhere; }
 
-.protocol-switch { display: flex; padding: 3px; background: var(--bf-panel); border-radius: var(--bf-radius-control); }
+.protocol-switch { display: flex; max-width: 100%; padding: 3px; background: var(--bf-panel); border-radius: var(--bf-radius-control); overflow-x: auto; }
 .protocol-switch button, .recipe-tabs button { min-height: 38px; border: 0; background: transparent; color: var(--bf-muted); padding: 0 0.8rem; font-size: 0.72rem; cursor: pointer; }
+.protocol-switch button { flex: 0 0 auto; }
 .protocol-switch button[data-active="true"] { background: var(--bf-panel-strong); color: var(--bf-on-strong); }
 .playground-grid { display: grid; grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.35fr); border: 1px solid var(--bf-divider); border-radius: var(--bf-radius-surface); overflow: hidden; }
-.request-pane { padding: 1.25rem; background: var(--bf-panel); }
+.request-pane { min-width: 0; padding: 1.25rem; background: var(--bf-panel); }
 .request-pane .bf-button { margin-top: 1rem; width: 100%; }
 .check-row { min-height: 40px; display: flex; align-items: center; gap: 0.65rem; margin-top: 0.65rem; color: var(--bf-muted); font-size: 0.74rem; }
 .check-row input { accent-color: var(--bf-color-orange); width: 17px; height: 17px; }
 .output-pane { min-width: 0; background: var(--bf-color-charcoal); color: var(--bf-color-warm-white); }
 .output-pane__header { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--bf-color-light-gray); font-size: 0.7rem; }
-.output-pane__header code { color: var(--bf-color-orange); font-family: var(--bf-font-mono); overflow-wrap: anywhere; }
+.output-pane__header code { min-width: 0; color: var(--bf-color-orange); font-family: var(--bf-font-mono); text-align: right; overflow-wrap: anywhere; }
 .output-pane pre, .recipe-code pre { margin: 0; font-family: var(--bf-font-mono); font-size: 0.7rem; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .output-pane pre { min-height: 360px; max-height: 520px; overflow: auto; padding: 1rem; color: #d7d4ce; }
 
@@ -204,6 +206,11 @@ h3 { font-size: 0.94rem; letter-spacing: -0.012em; }
   .detail-list dd { max-width: 48vw; }
   .main-stack { gap: 3.2rem; }
   .section-heading { align-items: flex-end; }
+  .playground .section-heading { align-items: stretch; flex-direction: column; }
+  .protocol-switch { align-self: flex-start; width: 100%; }
+  .protocol-switch button { flex: 1 1 0; padding-inline: 0.45rem; }
+  .playground-grid { min-width: 0; width: 100%; }
+  .output-pane__header code { max-width: 58%; }
   .model-row { grid-template-columns: 28px minmax(0, 1fr); }
   .model-row__params { display: none; }
   .playground-grid { grid-template-columns: 1fr; }

@@ -3,8 +3,8 @@
 ## Unreleased
 
 - `/v1/chat/completions` protocol adapter over the existing Anthropic `ParsedMessages` run engine. Contract-tested text, OpenAI SSE, function tools, continuation, replay, deferred and cache-aware usage, images, and OpenAI error shapes.
-- `/v1/responses` protocol adapter over the same run engine. Contract-tested non-stream text, Responses SSE lifecycle, reasoning, base64 `input_image`, function tools, same-turn parallel calls, `function_call_output` continuation by `call_id`, duplicate-same replay, deferred/final cache-aware usage, `reasoning_effort` / `cursor_model_params`, and Responses-shaped errors. `previous_response_id`, `store=true`, background, conversation, include expansions, and hosted built-in tools fail closed. Operator Console playground stays Messages/Chat.
-- Optional BF Labs Operator Console at `/console/`, bundled as static Vite assets and served by the existing Node process. It includes health, model/account reads, Messages/Chat playground, connection snippets, English/Chinese, and light/dark modes. Keys remain in page memory only.
+- `/v1/responses` protocol adapter over the same run engine. Contract-tested non-stream text, Responses SSE lifecycle, reasoning, base64 `input_image`, function tools, same-turn parallel calls, `function_call_output` continuation by `call_id`, duplicate-same replay, deferred/final cache-aware usage, `reasoning_effort` / `cursor_model_params`, and Responses-shaped errors. `previous_response_id`, `store=true`, background, conversation, include expansions, and hosted built-in tools fail closed. Operator Console includes a Responses playground tab.
+- Optional BF Labs Operator Console at `/console/`, bundled as static Vite assets and served by the existing Node process. It includes health, model/account reads, Messages/Chat/Responses playground, connection snippets, English/Chinese, and light/dark modes. Keys remain in page memory only.
 
 ## 0.1.0
 

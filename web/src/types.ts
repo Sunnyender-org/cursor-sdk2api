@@ -52,4 +52,4 @@ export interface AccountPayload {
   reasons?: Record<string, string>;
 }
 
-export type Protocol = "messages" | "chat";
+export type Protocol = "messages" | "chat" | "responses";

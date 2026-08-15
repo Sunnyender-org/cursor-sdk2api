@@ -18,7 +18,7 @@
 | `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`。花费和额度字段仅在官方接口真正返回时出现。 |
 | `POST` | `/v1/messages` | 需要 | Anthropic Messages 文本、SSE、客户端工具、同轮并行工具、多轮 continuation，以及进程内 replay。 |
 | `POST` | `/v1/chat/completions` | 需要 | OpenAI Chat Completions 适配：文本、`data:` SSE + `[DONE]`、function tools、continuation、`reasoning_content`、base64 `image_url`。与 Messages 共用同一套 session/run 引擎。 |
-| `POST` | `/v1/responses` | 需要 | OpenAI Responses 适配：`input` 字符串或 item、Responses SSE + `response.completed`、reasoning、base64 `input_image`、`type=function` 工具、按 `call_id` 续轮 `function_call_output`。与 Messages 共用同一套 session/run 引擎。`previous_response_id` / 托管工具 / `store=true` 会 fail closed。控制台 playground 仍只有 Messages/Chat。 |
+| `POST` | `/v1/responses` | 需要 | OpenAI Responses 适配：`input` 字符串或 item、Responses SSE + `response.completed`、reasoning、base64 `input_image`、`type=function` 工具、按 `call_id` 续轮 `function_call_output`。与 Messages 共用同一套 session/run 引擎。`previous_response_id` / 托管工具 / `store=true` 会 fail closed。控制台 playground 可直接使用 Responses。 |
 
 默认 **API Compatibility Profile**：
 
@@ -230,7 +230,7 @@ BYOK 凭据共享进程容量上限，但官方 SDK store 和空 workspace 按 c
 
 ## 现状与证据
 
-v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 和 Responses 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。运维控制台 playground 仍只覆盖 Messages/Chat；Responses 通过 `/v1/responses` 的 contract 测试验收，不走控制台 UI。
+v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 和 Responses 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。运维控制台 playground 可以在同一个提示词界面直接测试 Messages、Chat Completions 和 Responses。
 
 脱敏、不含秘密的验收摘要见 [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md)。这份 receipt 是有日期的本地样本，不能保证每个凭据、地区或镜像都一样：
 

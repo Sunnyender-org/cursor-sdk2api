@@ -459,7 +459,7 @@ Deliverables:
 
 - 同一 Node 进程在 `/console/` 提供静态 React/Vite 控制台，不增加生产前端服务或线程。
 - 使用 vendored MIT BF Labs UI tokens/components；不依赖私有 package registry。
-- runtime overview、模型目录、官方账号 surface、Messages/Chat playground 与 Claude Code/OpenAI/new-api 配置复制。
+- runtime overview、模型目录、官方账号 surface、Messages/Chat/Responses playground 与 Claude Code/OpenAI/new-api 配置复制。
 - 浏览器 key 只保存在当前 React 内存；不写 localStorage、sessionStorage、Cookie、URL 或服务端配置。
 - 英文默认、中文切换、light/dark、desktop 与 390px 验收。
 

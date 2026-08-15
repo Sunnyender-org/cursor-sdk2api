@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getAccount, getHealth, getModels, runPrompt } from "./api";
+import { getAccount, getHealth, getModels, protocolEndpoint, runPrompt } from "./api";
 import { BFTheme, type BFThemeTone } from "./bflabs/BFTheme";
 import { Button } from "./bflabs/Button";
 import { StatusTag } from "./bflabs/StatusTag";
@@ -132,6 +132,14 @@ export function App() {
       .map(([name]) => name.replaceAll("_", " "));
   }, [health]);
 
+  const protocolSummary = useMemo(() => {
+    if (!health) return "…";
+    const supported = ["Messages"];
+    if (health.capabilities.chat_completions === true) supported.push("Chat");
+    if (health.capabilities.responses === true) supported.push("Responses");
+    return supported.join(" + ");
+  }, [health]);
+
   const connect = async () => {
     if (!apiKey.trim()) {
       setConnectionError("Enter an API key for this tab");
@@ -242,7 +250,7 @@ export function App() {
           <dl className="status-grid">
             <StatusMetric label={t.sdk} value={health?.sdk_version ?? "…"} />
             <StatusMetric label={t.proxy} value={health ? (health.network.proxy_configured ? t.proxy : t.direct) : "…"} />
-            <StatusMetric label={t.protocols} value={health ? (health.capabilities.chat_completions ? "Messages + Chat" : "Messages") : "…"} />
+            <StatusMetric label={t.protocols} value={protocolSummary} />
             <StatusMetric label="Instance" value={health?.instance_id?.slice(0, 12) ?? "…"} />
           </dl>
         </section>
@@ -342,6 +350,7 @@ export function App() {
                 <div className="protocol-switch" role="group" aria-label="Protocol">
                   <button type="button" data-active={protocol === "messages"} aria-pressed={protocol === "messages"} onClick={() => setProtocol("messages")}>Messages</button>
                   <button type="button" data-active={protocol === "chat"} aria-pressed={protocol === "chat"} onClick={() => setProtocol("chat")}>Chat</button>
+                  <button type="button" data-active={protocol === "responses"} aria-pressed={protocol === "responses"} onClick={() => setProtocol("responses")}>Responses</button>
                 </div>
               </div>
               <div className="playground-grid">
@@ -369,7 +378,7 @@ export function App() {
                 <div className="output-pane" aria-live="polite">
                   <div className="output-pane__header">
                     <span>{t.output}</span>
-                    <code>{protocol === "messages" ? "/v1/messages" : "/v1/chat/completions"}</code>
+                    <code>{protocolEndpoint(protocol)}</code>
                   </div>
                   <pre>{output || t.emptyOutput}</pre>
                 </div>
