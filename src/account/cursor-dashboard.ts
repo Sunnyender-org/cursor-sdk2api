@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { brotliDecompressSync } from "node:zlib";
+import { credentialFingerprint } from "../digest.js";
 
 const DEFAULT_BASE_URL = "https://api2.cursor.sh";
 const RESPONSE_LIMIT = 1 << 20;
@@ -136,7 +136,7 @@ async function exchangeApiKey(
   baseUrl: string,
   request: typeof globalThis.fetch,
 ): Promise<string> {
-  const fingerprint = `${baseUrl}:${createHash("sha256").update(apiKey).digest("hex")}`;
+  const fingerprint = `${baseUrl}:${credentialFingerprint(apiKey)}`;
   const existing = activeExchanges.get(fingerprint);
   if (existing) return existing;
 
