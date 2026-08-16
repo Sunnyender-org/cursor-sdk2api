@@ -4,7 +4,7 @@
 
 - Default BYOK: the request bearer/`x-api-key` is the Cursor key.
 - Managed mode uses a distinct gateway access key. The two secrets must not be equal.
-- Keys are fingerprinted with SHA-256 and never written to logs, replay records, **gateway** lineage files, or error bodies. The official `@cursor/sdk` `JsonlLocalAgentStore` persists Agent conversation/checkpoints in its own format under credential-fingerprint partitions in `STATE_DIR/sdk-store`; each credential also gets a private empty-workspace partition. This gateway does not audit or redact SDK-owned checkpoint contents, so the entire state volume remains sensitive.
+- Runtime keys are fingerprinted with SHA-256 and never written to logs, replay records, gateway lineage files, or error bodies. When Operator Console account persistence is enabled, the explicitly added raw Cursor keys are stored in owner-only JSON files under `STATE_DIR/auths`. The official `@cursor/sdk` `JsonlLocalAgentStore` also persists Agent conversation/checkpoints in its own format under credential-fingerprint partitions in `STATE_DIR/sdk-store`; each credential gets a private empty-workspace partition. The entire state volume is sensitive.
 
 ## Tool isolation
 
@@ -12,7 +12,7 @@ The API Compatibility Profile does not grant Cursor ambient filesystem or shell 
 
 ## Operator console
 
-`/console/` is an unauthenticated static UI served by the same process as the API. Keys remain in React memory only and are not stored in browser storage, cookies, URLs, or server configuration. Do not publish port `8080` without TLS and an authentication proxy. If `CONSOLE_DIR` is overridden, keep it pointed at a dedicated, trusted build tree rather than a writable or shared directory.
+`/console/` is a static UI served by the same process as the API. Its v0.1 account-management endpoint has no separate access key. Raw Cursor keys returned to the same-origin console remain in page memory, while account JSON files are plaintext secrets protected by `0700`/`0600` filesystem permissions. Prefer an encrypted state volume. Keep port `8080` on a trusted local network or place it behind TLS and an authentication proxy. If `CONSOLE_DIR` is overridden, keep it pointed at a dedicated, trusted build tree.
 
 ## Logging
 

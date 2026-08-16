@@ -12,7 +12,7 @@
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
-| `GET` | `/console/` | 页面加载无需 | 可选 BF Labs 运维控制台。页面发起 API 请求仍需 key，且只保存在当前标签页的 React 内存中。 |
+| `GET` | `/console/` | 无 | 可选 BF Labs 运维控制台，账号按 CPA 风格持久化到 `STATE_DIR/auths`。 |
 | `GET` | `/health` | 无 | 构建版本、SDK 版本、就绪状态、**已实现**能力位、网络传输模式，以及独立的 `verification` 对象。能力位为 `true` 只表示网关实现了该路径，不是真实模型验收声明。`/health` 不含账号数据、密钥或代理 URL。 |
 | `GET` | `/v1/models` | 需要 | 实时 `Cursor.models.list()` 目录，保留精确公开模型 ID。不可用时返回空列表并给出明确 reason。 |
 | `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`；同一把 User API Key 直接查询 Cursor Dashboard 当前计费周期用量。无需 Cookie、Team Admin Key 或 OAuth Token。 |
@@ -39,8 +39,8 @@ export AUTH_MODE=byok
 node dist/index.js
 ```
 
-打开 `http://localhost:8080/console/` 使用可选运维控制台。Health 无需 key；
-模型、账号和协议测试请求使用只存在于页面内存中的 key，刷新或关闭标签页后即清除。
+打开 `http://localhost:8080/console/` 使用可选运维控制台。Cursor 账号文件保存在服务端
+`STATE_DIR/auths`，目录权限为 `0700`、文件权限为 `0600`，刷新页面或重启网关后仍会保留。
 
 ```bash
 curl -s localhost:8080/health
@@ -99,6 +99,8 @@ docker run --rm -p 8080:8080 \
 **BYOK（默认）。** 每个请求用 `Authorization: Bearer` 或 `x-api-key` 携带 Cursor API Key。进程只在内存中持有该密钥，并用不可逆 fingerprint 隔离会话。
 
 **Managed（可选）。** 进程持有 `CURSOR_API_KEY`。客户端发送不同的 `GATEWAY_ACCESS_KEY`。Health 不会暴露 managed 模式下的 Cursor 身份。
+
+**控制台账号。** 本地控制台在 `STATE_DIR/auths` 增删查 Cursor 账号文件。这些文件包含原始 Cursor API Key，必须作为敏感信息保护。v0.1 的控制台管理接口没有单独 Access Key，请只在可信本地网络使用，或在外层加认证代理。
 
 禁止：浏览器 Cookie、Desktop/CLI 私有凭据库、邮箱密码登录、refresh token 导入，以及把密钥放进 URL、模型名或 tool ID。
 
@@ -220,6 +222,7 @@ MVP 只在创建该 live run 的进程里持有它。
 
 `STATE_DIR` 存放：
 
+- 可选的控制台账号文件：`$STATE_DIR/auths`（`0700` / `0600`；明文敏感信息）
 - 官方 JSONL SDK store：`$STATE_DIR/sdk-store/<credential-fingerprint>`
 - 仅属主可读写的 lineage 元数据：`$STATE_DIR/lineage`（`0700` / `0600`）
 

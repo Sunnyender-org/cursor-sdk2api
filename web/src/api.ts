@@ -1,5 +1,12 @@
 import type { AccountPayload, HealthPayload, ModelsPayload, Protocol } from "./types.js";
 
+export interface ManagementAccount {
+  id: string;
+  api_key: string;
+  key_hint: string;
+  added_at: number;
+}
+
 export async function getHealth(): Promise<HealthPayload> {
   return getJson<HealthPayload>("/health");
 }
@@ -10,6 +17,29 @@ export async function getModels(apiKey: string): Promise<ModelsPayload> {
 
 export async function getAccount(apiKey: string): Promise<AccountPayload> {
   return getJson<AccountPayload>("/v1/account", apiKey);
+}
+
+export async function getManagedAccounts(): Promise<ManagementAccount[]> {
+  const body = await managementJson<{ accounts: ManagementAccount[] }>({
+    method: "GET",
+  });
+  return body.accounts;
+}
+
+export async function addManagedAccount(apiKey: string): Promise<ManagementAccount> {
+  const body = await managementJson<{ account: ManagementAccount }>({
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  return body.account;
+}
+
+export async function removeManagedAccount(id: string): Promise<void> {
+  await managementJson<{ deleted: true }>({
+    method: "DELETE",
+    path: `?id=${encodeURIComponent(id)}`,
+  });
 }
 
 export async function runPrompt(input: {
@@ -80,6 +110,15 @@ async function getJson<T>(path: string, apiKey?: string): Promise<T> {
   const response = await fetch(path, {
     headers: apiKey ? { authorization: `Bearer ${apiKey}` } : undefined,
   });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return (await response.json()) as T;
+}
+
+async function managementJson<T>(
+  init: RequestInit & { path?: string },
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  const response = await fetch(`/v0/management/accounts${init.path ?? ""}`, { ...init, headers });
   if (!response.ok) throw new Error(await errorMessage(response));
   return (await response.json()) as T;
 }

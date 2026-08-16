@@ -12,7 +12,7 @@ This is **not** an official Cursor or Anysphere product. Model execution does no
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| `GET` | `/console/` | none to load | Optional BF Labs Operator Console. API calls from the page still require a key, which stays in the current browser tab's React memory only. |
+| `GET` | `/console/` | none | Optional BF Labs Operator Console with CPA-style persistent account files under `STATE_DIR/auths`. |
 | `GET` | `/health` | none | Build, SDK version, readiness, **implemented** capability bits, network transport modes, and a separate `verification` object. Capability `true` means the gateway implements the path; it is not a live-model acceptance claim. `/health` never includes account data, keys, or proxy URLs. |
 | `GET` | `/v1/models` | required | Live `Cursor.models.list()` catalog with exact public IDs. Empty list plus an explicit reason when unavailable. |
 | `GET` | `/v1/account` | required | Identity from `Cursor.me()` plus current billing-cycle usage from Cursor Dashboard using the same User API Key. No Cookie, Team Admin key, or OAuth token is required. |
@@ -39,9 +39,9 @@ export AUTH_MODE=byok
 node dist/index.js
 ```
 
-Open `http://localhost:8080/console/` for the optional Operator Console. It reads
-health without a key, then uses a key held only in page memory for model, account,
-and playground requests. Reloading or closing the tab clears it.
+Open `http://localhost:8080/console/` for the optional Operator Console. Cursor
+account files are stored server-side under `STATE_DIR/auths` with `0700` directory
+and `0600` file permissions, so accounts survive page and gateway restarts.
 
 ```bash
 curl -s localhost:8080/health
@@ -100,6 +100,8 @@ Do not put proxy userinfo in compose files or docs. Prefer a credential-free loo
 **BYOK (default).** Each request sends a Cursor API key as `Authorization: Bearer` or `x-api-key`. The process keeps the key in memory only and isolates sessions by an irreversible fingerprint.
 
 **Managed (optional).** The process holds `CURSOR_API_KEY`. Clients send a different `GATEWAY_ACCESS_KEY`. Health does not expose the managed Cursor identity.
+
+**Console accounts.** The local console adds, lists, and removes Cursor account files in `STATE_DIR/auths`. These files contain the raw Cursor API key and must be treated as secrets. The v0.1 console management endpoint has no separate access key, so keep the console on a trusted local network or behind your own authentication proxy.
 
 Forbidden: browser cookies, Desktop/CLI private stores, email/password login, refresh-token import, and putting keys in URLs, model names, or tool IDs.
 
@@ -221,6 +223,7 @@ Completed follow-up with `x-cursor-session-id` can `Agent.resume` within `SESSIO
 
 `STATE_DIR` holds:
 
+- optional Operator Console account files at `$STATE_DIR/auths` (`0700` / `0600`; plaintext secrets)
 - official JSONL SDK store at `$STATE_DIR/sdk-store/<credential-fingerprint>`
 - owner-only lineage metadata at `$STATE_DIR/lineage` (`0700` / `0600`)
 

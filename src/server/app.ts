@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { authenticate } from "../auth/credentials.js";
 import { readAccount } from "../account/service.js";
+import { CursorAccountFileStore } from "../account/file-store.js";
 import type { Clock } from "../clock.js";
 import type { GatewayConfig } from "../config.js";
 import { RunCoordinator } from "../core/run-coordinator.js";
@@ -30,6 +31,7 @@ export interface App {
   coordinator: RunCoordinator;
   catalog: ModelCatalog;
   lineage: LineageStore;
+  accounts: CursorAccountFileStore;
   sdk: SdkRuntime;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   listen(): Server;
@@ -65,6 +67,7 @@ export function createApp(input: {
     beforeApplyBoundary,
   });
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
+  const accounts = new CursorAccountFileStore(config.stateDir, config.managedCursorKey);
   let shuttingDown = false;
   const sweepTimer = setInterval(() => {
     try {
@@ -128,6 +131,52 @@ export function createApp(input: {
           requestId,
         );
         return;
+      }
+
+      if (path === "/v0/management/accounts") {
+        if (method === "GET") {
+          sendJson(
+            res,
+            200,
+            {
+              accounts: accounts.list().map((account) => ({
+                id: account.id,
+                api_key: account.apiKey,
+                key_hint: account.keyHint,
+                added_at: account.addedAt,
+              })),
+            },
+            requestId,
+          );
+          return;
+        }
+        if (method === "POST") {
+          const body = await readJsonBody(req, config.maxBodyBytes) as { api_key?: unknown } | undefined;
+          const apiKey = typeof body?.api_key === "string" ? body.api_key.trim() : "";
+          if (!apiKey) throw invalidRequest("api_key is required");
+          const account = accounts.add(apiKey);
+          sendJson(
+            res,
+            201,
+            {
+              account: {
+                id: account.id,
+                api_key: account.apiKey,
+                key_hint: account.keyHint,
+                added_at: account.addedAt,
+              },
+            },
+            requestId,
+          );
+          return;
+        }
+        if (method === "DELETE") {
+          const id = new URL(req.url ?? "/", "http://localhost").searchParams.get("id")?.trim() ?? "";
+          if (!id) throw invalidRequest("id is required");
+          if (!accounts.remove(id)) throw notFound("Persistent account was not found");
+          sendJson(res, 200, { deleted: true }, requestId);
+          return;
+        }
       }
 
       if (method === "GET" && path === "/v1/models") {
@@ -252,6 +301,7 @@ export function createApp(input: {
     coordinator,
     catalog,
     lineage,
+    accounts,
     sdk,
     handler,
     listen() {

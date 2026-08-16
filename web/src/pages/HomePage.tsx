@@ -216,4 +216,9 @@ export type HomeCopy = {
   testFail: string;
   open: string;
   headers: [string, string, string, string];
+  add: string;
+  adding: string;
+  keyPlaceholder: string;
+  keyHelp: string;
+  remove: string;
 };

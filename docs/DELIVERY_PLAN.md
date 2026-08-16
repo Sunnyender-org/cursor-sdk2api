@@ -460,19 +460,19 @@ Deliverables:
 - 同一 Node 进程在 `/console/` 提供静态 React/Vite 控制台，不增加生产前端服务或线程。
 - 使用 vendored MIT BF Labs UI tokens/components；不依赖私有 package registry。
 - runtime overview、模型目录、官方账号 surface、Messages/Chat/Responses playground 与 Claude Code/OpenAI/new-api 配置复制。
-- 浏览器 key 只保存在当前 React 内存；不写 localStorage、sessionStorage、Cookie、URL 或服务端配置。
+- 原始 Cursor Key 不进入浏览器持久化。账号按 CPA 风格持久化到服务端 `STATE_DIR/auths` 的 `0700`/`0600` JSON 文件；v0.1 不增加 Console Access Key。
 - 英文默认、中文切换、light/dark、desktop 与 390px 验收。
 
 Non-goals:
 
-- 用户、充值、计费、分组、渠道池、账号池、日志 payload 浏览与网页修改 `.env`。
-- 复制 CPA/New API 的管理域或后端 API。
+- 用户、充值、计费、分组、渠道调度、日志 payload 浏览与网页修改 `.env`。
+- 复制 CPA/New API 的完整管理域；这里只保留账号文件的最小增删查。
 
 Gate:
 
 - frontend typecheck/build、静态资源/CSP/path traversal contract tests、Docker build/run 通过。
 - 真实浏览器读取 health；使用隔离测试 key 时才能验收 models/account/playground。
-- desktop 与 390px 无横向溢出、控制台错误、密钥持久化或误导性能力声明。
+- desktop 与 390px 无横向溢出、控制台错误、浏览器原始 Cursor Key 持久化或误导性能力声明。
 
 Stop condition:
 

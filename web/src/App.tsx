@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { newAccountId } from "./accounts";
-import { getAccount, getHealth, getModels, runPrompt } from "./api";
+import { addManagedAccount, getAccount, getHealth, getManagedAccounts, getModels, removeManagedAccount, runPrompt } from "./api";
 import { go, hrefFor, readRoute, type Route } from "./nav";
 import { RailNav } from "./RailNav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
@@ -33,7 +32,7 @@ const COPY = {
     navPlay: "Playground",
     navHomeMeta: "Runtime and API URLs",
     navStartMeta: "Client recipes",
-    navAccountsMeta: "Keys in this browser",
+    navAccountsMeta: "Persistent credentials",
     navQuotaMeta: "Cursor dashboard usage",
     navPlayMeta: "Messages / Chat / Responses",
     consoleTag: "Local console",
@@ -79,14 +78,14 @@ const COPY = {
       verdictOffline: "Waiting to connect",
       verdictGoodBody: "Local gateway is ready. Quota uses Cursor Dashboard current-period data.",
       verdictWarnBody: "At least one key failed its probe. Open Accounts to retest.",
-      verdictIdleBody: "Process is up. Add a Cursor key in this browser to start probing.",
+      verdictIdleBody: "Process is up. Open Accounts and add a Cursor key to start probing.",
       verdictOfflineBody: "The console cannot reach /health on this origin.",
       nextKicker: "Next",
       nextTitle: "Where to go next",
       nextQuota: "Quota",
       nextQuotaDesc: "Totals first, then each account returned by Cursor Dashboard.",
       nextAuth: "Accounts",
-      nextAuthDesc: "Add, probe, and remove Cursor keys. They stay in this browser.",
+      nextAuthDesc: "Add, probe, and remove persistent Cursor credentials.",
       nextPlay: "Playground",
       nextPlayDesc: "Send one Messages, Chat, or Responses request through the gateway.",
       nextStart: "Quick start",
@@ -111,7 +110,7 @@ const COPY = {
       fableOffShort: "off",
       breakdown: "Per account",
       testAll: "Test all",
-      noAccounts: "No Cursor keys in this browser yet.",
+      noAccounts: "No persistent Cursor accounts yet.",
       quotaMissing: "Not returned",
       fableOn: "On",
       fableOff: "Off",
@@ -124,7 +123,7 @@ const COPY = {
       add: "Add",
       adding: "Adding",
       keyPlaceholder: "Cursor API key",
-      keyHelp: "Keys stay in this tab's memory and are never written to the gateway.",
+      keyHelp: "Stored by the gateway in STATE_DIR/auths with owner-only file permissions.",
       remove: "Remove",
     },
     detail: {
@@ -187,7 +186,7 @@ const COPY = {
     navPlay: "协议试跑",
     navHomeMeta: "运行控制和 API 地址",
     navStartMeta: "客户端配方",
-    navAccountsMeta: "本浏览器凭证",
+    navAccountsMeta: "持久化凭证",
     navQuotaMeta: "官方限额",
     navPlayMeta: "Messages / Chat / Responses",
     consoleTag: "本机控制台",
@@ -233,14 +232,14 @@ const COPY = {
       verdictOffline: "等待连接",
       verdictGoodBody: "本机网关已就绪。额度来自 Cursor Dashboard 当前周期。",
       verdictWarnBody: "至少一把 Key 测通失败。去账号页重测。",
-      verdictIdleBody: "进程已起来。在这个浏览器加入 Cursor Key 即可测通。",
+      verdictIdleBody: "进程已起来。去账号页加入 Cursor Key 即可测通。",
       verdictOfflineBody: "控制台连不上这个 origin 的 /health。",
       nextKicker: "下一步",
       nextTitle: "接下来去哪里",
       nextQuota: "配额",
       nextQuotaDesc: "先看合计，再看 Cursor Dashboard 返回的每个账号。",
       nextAuth: "账号",
-      nextAuthDesc: "在这个浏览器加入、测通、移除 Cursor Key。",
+      nextAuthDesc: "加入、测通、移除服务端持久化的 Cursor Key。",
       nextPlay: "协议试跑",
       nextPlayDesc: "用 Messages / Chat / Responses 打一条真实请求。",
       nextStart: "快速开始",
@@ -265,7 +264,7 @@ const COPY = {
       fableOffShort: "未开",
       breakdown: "分账号",
       testAll: "全部测通",
-      noAccounts: "这个浏览器里还没有 Cursor Key。",
+      noAccounts: "还没有持久化的 Cursor 账号。",
       quotaMissing: "未返回",
       fableOn: "已开",
       fableOff: "未开",
@@ -278,7 +277,7 @@ const COPY = {
       add: "加入",
       adding: "加入中",
       keyPlaceholder: "Cursor API Key",
-      keyHelp: "密钥仅留在当前标签页内存，不会写入网关进程。",
+      keyHelp: "账号由网关写入 STATE_DIR/auths，并使用仅属主可读写的文件权限。",
       remove: "移除",
     },
     detail: {
@@ -425,6 +424,28 @@ export function App() {
     });
   };
 
+  const loadAccounts = async () => {
+    try {
+      const accounts = await getManagedAccounts();
+      const next = accounts.map((account): RosterItem => ({
+        id: account.id,
+        key: account.api_key,
+        addedAt: account.added_at,
+        testState: "idle",
+      }));
+      setRoster(next);
+      setActiveId((current) => next.some((item) => item.id === current) ? current : next[0]?.id ?? "");
+      await Promise.all(next.map((item) => probe(item.id, item.key)));
+    } catch (error) {
+      setAddError(messageOf(error));
+      setRoster([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadAccounts();
+  }, []);
+
   const probe = async (id: string, key: string) => {
     const started = performance.now();
     patchRoster(id, { testState: "testing", testError: undefined });
@@ -463,22 +484,29 @@ export function App() {
       setAddError(t.keyNeeded);
       return;
     }
-    if (roster.some((item) => item.key === key)) {
-      setDraftKey("");
-      setAddError("");
-      return;
-    }
     setAdding(true);
     setAddError("");
-    const next: RosterItem = { id: newAccountId(), key, addedAt: Date.now(), testState: "testing" };
-    setRoster((current) => [...current, next]);
-    setActiveId(next.id);
-    setDraftKey("");
-    await probe(next.id, next.key);
-    setAdding(false);
+    try {
+      const account = await addManagedAccount(key);
+      const next: RosterItem = { id: account.id, key: account.api_key, addedAt: account.added_at, testState: "testing" };
+      setRoster((current) => current.some((item) => item.id === next.id) ? current : [...current, next]);
+      setActiveId(next.id);
+      setDraftKey("");
+      await probe(next.id, next.key);
+    } catch (error) {
+      setAddError(messageOf(error));
+    } finally {
+      setAdding(false);
+    }
   };
 
-  const removeAccount = (id: string) => {
+  const removeAccount = async (id: string) => {
+    try {
+      await removeManagedAccount(id);
+    } catch (error) {
+      setAddError(messageOf(error));
+      return;
+    }
     setRoster((current) => {
       const next = current.filter((item) => item.id !== id);
       if (id === activeId) {
@@ -609,7 +637,7 @@ export function App() {
             onDraft={setDraftKey}
             onAdd={() => void addAccount()}
             onTest={(id) => void testAccount(id)}
-            onRemove={removeAccount}
+            onRemove={(id) => void removeAccount(id)}
           />
         ) : null}
         {route.page === "account" ? (
