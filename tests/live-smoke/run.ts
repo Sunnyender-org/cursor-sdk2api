@@ -123,7 +123,7 @@ async function main(): Promise<void> {
         arch: process.arch,
         gateway_version: gatewayVersion,
         sdk_version: sdkVersion,
-        runner: "scripts/live-smoke",
+        runner: "tests/live-smoke",
         mode: child ? "child" : "attach",
         catalog_status: catalogStatus,
         proxy_configured: healthJson.network?.proxy_configured,

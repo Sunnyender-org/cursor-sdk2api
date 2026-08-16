@@ -35,9 +35,9 @@
     "dev": "npm run build:web && node --import tsx src/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "lint": "npm run typecheck",
-    "live:smoke": "tsx scripts/live-smoke/run.ts",
+    "live:smoke": "tsx tests/live-smoke/run.ts",
     "new-api:smoke": "node integrations/new-api/smoke.mjs",
-    "secret:scan": "bash scripts/secret-scan.sh"
+    "secret:scan": "bash tests/secret-scan.sh"
   },
   "dependencies": {
     "@cursor/sdk": "1.0.28",

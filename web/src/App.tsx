@@ -14,6 +14,7 @@ import { Button } from "./bflabs/Button";
 import { StatusTag } from "./bflabs/StatusTag";
 import type { RosterItem } from "./roster";
 import type { HealthPayload, Protocol } from "./types";
+import bfMarkUrl from "./assets/bf-mark.svg";
 
 type Language = "en" | "zh";
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -169,7 +170,7 @@ const COPY = {
       routeNote: "Why",
       workspaceTitle: "Local files",
       workspaceBody:
-        "Grok Build and Claude Code edit files with their own local tools in your project directory. This gateway only runs the model. Cursor SDK uses an empty workspace, so the model may emit that absolute path. Use a relative path or your project path. A BeefAPI Cursor channel is the same split: remote inference, local tools.",
+        "Grok Build and Claude Code edit files with their own local tools in your project directory. This gateway only runs the model. Cursor SDK uses an empty workspace, so the model may emit that absolute path. Use a relative path or your project path.",
     },
     keyNeeded: "Paste a Cursor API key first.",
   },
@@ -323,7 +324,7 @@ const COPY = {
       routeNote: "说明",
       workspaceTitle: "本地文件",
       workspaceBody:
-        "Grok Build / Claude Code 改文件用的是它们自己的本机工具，工作区是你的项目目录。这个网关只提供模型推理。Cursor SDK 的 cwd 是空目录，所以模型有时会吐出网关绝对路径。写相对路径或你的项目路径就能改本地文件。BeefAPI 的 Cursor 通路也是同一件事：远端推理，本地工具。",
+        "Grok Build / Claude Code 改文件用的是它们自己的本机工具，工作区是你的项目目录。这个网关只提供模型推理。Cursor SDK 的 cwd 是空目录，所以模型有时会吐出网关绝对路径。写相对路径或你的项目路径就能改本地文件。",
     },
     keyNeeded: "先粘贴一把 Cursor Key。",
   },
@@ -714,13 +715,7 @@ function NavIcon({ name }: { name: "home" | "quota" | "key" | "start" | "play" }
 }
 
 function BfMark() {
-  return (
-    <svg className="mark" aria-hidden="true" viewBox="0 0 1200 700" width="28" height="16">
-      <path fill="currentColor" fillRule="evenodd" clipRule="evenodd" d="M0 4H463C570 4 648 82 648 207C648 268 629 318 598 350C634 382 658 432 658 500C658 616 582 700 470 700H0ZM144 160H440C476 160 499 186 499 224C499 253 486 271 463 278H144ZM370 278H445L582 350H428ZM428 350H582L470 422H374ZM374 422H470C493 433 506 458 506 490C506 524 481 550 442 550H144V430H374Z" />
-      <path fill="currentColor" d="M556 4H1122L1035 160H680C665 104 622 47 556 4Z" />
-      <path fill="currentColor" d="M679 292H1200L1114 444H684C670 414 658 384 650 350C657 328 667 309 679 292Z" />
-    </svg>
-  );
+  return <img className="mark" aria-hidden="true" src={bfMarkUrl} alt="" />;
 }
 
 async function copyText(value: string): Promise<void> {

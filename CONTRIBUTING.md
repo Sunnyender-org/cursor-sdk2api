@@ -4,7 +4,7 @@
 
 1. Deterministic contract tests with the injected fake SDK (`tests/contract`, `tests/integration`).
 2. Isolated Docker build.
-3. Opt-in live smoke only (`scripts/live-smoke`). Never put real credentials in fixtures or CI.
+3. Opt-in live smoke only (`tests/live-smoke`). Never put real credentials in fixtures or CI.
 4. `integrations/new-api/compose-e2e.sh` is credential-free infrastructure
    evidence. `integrations/new-api/smoke.mjs` is opt-in live-model evidence and
    requires a new-api user token plus locally configured channels.

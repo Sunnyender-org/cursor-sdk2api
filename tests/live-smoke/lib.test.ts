@@ -5,9 +5,9 @@ import {
   DEFAULT_LIVE_MODELS,
   resolveCatalogModel,
   resolveRequestedModels,
-} from "../../scripts/live-smoke/lib/catalog.js";
-import { defaultRequestedModels, liveSmokeGate } from "../../scripts/live-smoke/lib/gate.js";
-import { applyLiveModelSelection } from "../../scripts/live-smoke/lib/client.js";
+} from "./lib/catalog.js";
+import { defaultRequestedModels, liveSmokeGate } from "./lib/gate.js";
+import { applyLiveModelSelection } from "./lib/client.js";
 import {
   buildReceipt,
   exitCodeFor,
@@ -15,8 +15,8 @@ import {
   receiptOk,
   summarizeCases,
   type SmokeCase,
-} from "../../scripts/live-smoke/lib/receipt.js";
-import { assertNoCanary, receiptContainsCanary, redactSecrets, redactValue } from "../../scripts/live-smoke/lib/redact.js";
+} from "./lib/receipt.js";
+import { assertNoCanary, receiptContainsCanary, redactSecrets, redactValue } from "./lib/redact.js";
 import {
   containsOpaqueMarker,
   listToolUses,
@@ -24,10 +24,10 @@ import {
   pickErrorType,
   pickUsage,
   sseShapeOk,
-} from "../../scripts/live-smoke/lib/sse.js";
+} from "./lib/sse.js";
 
 test("check.mjs refuses to start without CURSOR_LIVE_SMOKE=1", () => {
-  const result = spawnSync(process.execPath, ["scripts/live-smoke/check.mjs"], {
+  const result = spawnSync(process.execPath, ["tests/live-smoke/check.mjs"], {
     env: { PATH: process.env.PATH },
     encoding: "utf8",
   });
@@ -158,7 +158,7 @@ test("receipt build refuses to emit a canary and omits payload fields", () => {
       node: "v22.19.0",
       platform: "linux",
       arch: "arm64",
-      runner: "scripts/live-smoke",
+      runner: "tests/live-smoke",
       mode: "child",
     },
     catalog: { requested: ["composer-2.5"], model_ids: ["composer-2.5"], resolved: [], missing: [] },

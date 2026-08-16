@@ -708,7 +708,8 @@ html[lang="zh-CN"] .page-head h1 { letter-spacing: 0; }
   border-right: 1px solid var(--hair);
   text-decoration: none;
 }
-.mark { width: 36px; height: auto; color: var(--ink); }
+.mark { width: 36px; height: auto; }
+.bf-theme[data-tone="dark"] .mark { filter: brightness(0) invert(1); }
 .brand-text { display: flex; align-items: baseline; gap: 8px; }
 .brand-name { font-size: 15px; font-weight: 600; letter-spacing: -0.03em; }
 .brand-prod { font-family: var(--mono); font-size: 12px; color: var(--mute); }

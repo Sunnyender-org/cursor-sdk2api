@@ -476,7 +476,7 @@ Gate:
 
 Stop condition:
 
-- 前端要求新增 billing/user/channel 数据模型；该需求留给上层 new-api/BeefAPI，不扩张 standalone gateway core。
+- 前端要求新增 billing/user/channel 数据模型；该需求留给上层聚合网关，不扩张 standalone gateway core。
 
 ### Phase 3 — v0.3 Operational Reliability
 

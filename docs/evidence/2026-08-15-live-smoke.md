@@ -1,6 +1,6 @@
 # Live Smoke Receipt — 2026-08-15
 
-This is a redacted public summary produced from opt-in, loopback-only runs of `scripts/live-smoke` using official `@cursor/sdk` 1.0.28. It contains no API key, account identity, prompt, assistant text, tool arguments, tool results, home path, or browser data. The full machine receipts remain private artifacts outside git.
+This is a redacted public summary produced from opt-in, loopback-only runs of `tests/live-smoke` using official `@cursor/sdk` 1.0.28. It contains no API key, account identity, prompt, assistant text, tool arguments, tool results, home path, or browser data. The full machine receipts remain private artifacts outside git.
 
 Environment: gateway `0.1.0`, Node `v26.0.0`, macOS arm64, child-process mode. The authenticated catalog returned 36 models and resolved the requested IDs exactly.
 
