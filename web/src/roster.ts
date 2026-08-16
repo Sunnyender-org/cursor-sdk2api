@@ -4,7 +4,7 @@ export type TestState = "idle" | "testing" | "pass" | "fail";
 
 export interface RosterItem {
   id: string;
-  key: string;
+  keyHint: string;
   addedAt: number;
   testState: TestState;
   testMs?: number;

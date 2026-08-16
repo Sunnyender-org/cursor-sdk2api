@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { addManagedAccount, getAccount, getHealth, getManagedAccounts, getModels, removeManagedAccount, runPrompt } from "./api";
+import { addManagedAccount, getHealth, getManagedAccounts, probeManagedAccount, removeManagedAccount, runPrompt } from "./api";
 import { go, hrefFor, readRoute, type Route } from "./nav";
 import { RailNav } from "./RailNav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
@@ -398,10 +398,10 @@ export function App() {
   }, [health]);
 
   const snippets: Record<RecipeName, string> = {
-    claude: `ANTHROPIC_BASE_URL=${origin}\nANTHROPIC_AUTH_TOKEN=<account-key>\nANTHROPIC_MODEL=claude-sonnet-4-6\nclaude`,
-    grok: `[models]\ndefault = "cursor-gw"\n\n[model.cursor-gw]\nname = "cursor-sdk2api"\nbase_url = "${origin}/v1"\napi_key = "<account-key>"\nmodel = "grok-4.6"\napi_backend = "responses"\n\n# Isolated: GROK_HOME=/path/to/grok_home grok --model cursor-gw`,
-    openai: `from openai import OpenAI\nclient = OpenAI(base_url="${origin}/v1", api_key="<account-key>")`,
-    newapi: `Base URL: ${origin}\nAPI key: <account-key>\nAnthropic upstream: ${origin}\nOpenAI upstream: ${origin}/v1`,
+    claude: `ANTHROPIC_BASE_URL=${origin}\nANTHROPIC_AUTH_TOKEN=<gateway-key>\nANTHROPIC_MODEL=claude-sonnet-4-6\nclaude`,
+    grok: `[models]\ndefault = "cursor-gw"\n\n[model.cursor-gw]\nname = "cursor-sdk2api"\nbase_url = "${origin}/v1"\napi_key = "<gateway-key>"\nmodel = "grok-4.6"\napi_backend = "responses"\n\n# Isolated: GROK_HOME=/path/to/grok_home grok --model cursor-gw`,
+    openai: `from openai import OpenAI\nclient = OpenAI(base_url="${origin}/v1", api_key="<gateway-key>")`,
+    newapi: `Base URL: ${origin}\nAPI key: <gateway-key>\nAnthropic upstream: ${origin}\nOpenAI upstream: ${origin}/v1`,
   };
   const clientRoutes = language === "zh"
     ? [
@@ -430,13 +430,13 @@ export function App() {
       const accounts = await getManagedAccounts();
       const next = accounts.map((account): RosterItem => ({
         id: account.id,
-        key: account.api_key,
+        keyHint: account.key_hint,
         addedAt: account.added_at,
         testState: "idle",
       }));
       setRoster(next);
       setActiveId((current) => next.some((item) => item.id === current) ? current : next[0]?.id ?? "");
-      await Promise.all(next.map((item) => probe(item.id, item.key)));
+      await Promise.all(next.map((item) => probe(item.id)));
     } catch (error) {
       setAddError(messageOf(error));
       setRoster([]);
@@ -447,11 +447,11 @@ export function App() {
     void loadAccounts();
   }, []);
 
-  const probe = async (id: string, key: string) => {
+  const probe = async (id: string) => {
     const started = performance.now();
     patchRoster(id, { testState: "testing", testError: undefined });
     try {
-      const [nextModels, nextAccount] = await Promise.all([getModels(key), getAccount(key)]);
+      const { models: nextModels, account: nextAccount } = await probeManagedAccount(id);
       patchRoster(id, {
         testState: "pass",
         testMs: Math.round(performance.now() - started),
@@ -472,11 +472,11 @@ export function App() {
   const testAccount = async (id: string) => {
     const item = roster.find((entry) => entry.id === id);
     if (!item) return;
-    await probe(item.id, item.key);
+    await probe(item.id);
   };
 
   const testAll = async () => {
-    await Promise.all(roster.map((item) => probe(item.id, item.key)));
+    await Promise.all(roster.map((item) => probe(item.id)));
   };
 
   const addAccount = async () => {
@@ -489,11 +489,11 @@ export function App() {
     setAddError("");
     try {
       const account = await addManagedAccount(key);
-      const next: RosterItem = { id: account.id, key: account.api_key, addedAt: account.added_at, testState: "testing" };
+      const next: RosterItem = { id: account.id, keyHint: account.key_hint, addedAt: account.added_at, testState: "testing" };
       setRoster((current) => current.some((item) => item.id === next.id) ? current : [...current, next]);
       setActiveId(next.id);
       setDraftKey("");
-      await probe(next.id, next.key);
+      await probe(next.id);
     } catch (error) {
       setAddError(messageOf(error));
     } finally {
@@ -520,12 +520,12 @@ export function App() {
   };
 
   const run = async () => {
-    if (!active?.key || !selectedModel || !prompt.trim()) return;
+    if (!active || !selectedModel || !prompt.trim()) return;
     setRunState("loading");
     setOutput("");
     try {
       await runPrompt({
-        apiKey: active.key,
+        accountId: active.id,
         protocol,
         model: selectedModel,
         prompt: prompt.trim(),

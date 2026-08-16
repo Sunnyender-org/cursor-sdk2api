@@ -2,7 +2,6 @@ import type { AccountPayload, HealthPayload, ModelsPayload, Protocol } from "./t
 
 export interface ManagementAccount {
   id: string;
-  api_key: string;
   key_hint: string;
   added_at: number;
 }
@@ -17,6 +16,13 @@ export async function getModels(apiKey: string): Promise<ModelsPayload> {
 
 export async function getAccount(apiKey: string): Promise<AccountPayload> {
   return getJson<AccountPayload>("/v1/account", apiKey);
+}
+
+export async function probeManagedAccount(id: string): Promise<{ models: ModelsPayload; account: AccountPayload }> {
+  return managementJson<{ models: ModelsPayload; account: AccountPayload }>({
+    method: "GET",
+    path: `/probe?id=${encodeURIComponent(id)}`,
+  });
 }
 
 export async function getManagedAccounts(): Promise<ManagementAccount[]> {
@@ -43,14 +49,13 @@ export async function removeManagedAccount(id: string): Promise<void> {
 }
 
 export async function runPrompt(input: {
-  apiKey: string;
+  accountId: string;
   protocol: Protocol;
   model: string;
   prompt: string;
   stream: boolean;
   onChunk: (value: string) => void;
 }): Promise<void> {
-  const endpoint = protocolEndpoint(input.protocol);
   const body =
     input.protocol === "messages"
       ? {
@@ -71,13 +76,12 @@ export async function runPrompt(input: {
             stream: input.stream,
             input: input.prompt,
           };
-  const response = await fetch(endpoint, {
+  const response = await fetch("/v0/management/accounts/run", {
     method: "POST",
     headers: {
-      authorization: `Bearer ${input.apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ account_id: input.accountId, protocol: input.protocol, request: body }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
 

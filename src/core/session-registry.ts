@@ -177,6 +177,13 @@ export class SessionRegistry {
     ).length;
   }
 
+  activeRunCountForCredential(credentialFingerprint: string): number {
+    return [...this.sessions.values()].filter(
+      (session) =>
+        session.credentialFingerprint === credentialFingerprint && ACTIVE_RUN_STATES.has(session.state),
+    ).length;
+  }
+
   beginShutdown(): void {
     this.shuttingDown = true;
   }

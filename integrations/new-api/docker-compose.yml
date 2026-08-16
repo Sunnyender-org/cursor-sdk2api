@@ -8,8 +8,10 @@ services:
         REVISION: local
     pull_policy: missing
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     environment:
-      AUTH_MODE: ${CURSOR_AUTH_MODE:-byok}
+      AUTH_MODE: ${CURSOR_AUTH_MODE:-managed}
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       GATEWAY_ACCESS_KEY: ${GATEWAY_ACCESS_KEY:-}
       HOST: 0.0.0.0

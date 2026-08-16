@@ -14,16 +14,21 @@ The immutable build includes the optional BF Labs Operator Console at
 second production service is required. Set `CONSOLE_DIR` only when an operator
 intentionally supplies a different prebuilt static bundle.
 
-Loading the page is unauthenticated. Models, account, Messages, and Chat calls
-still use the normal gateway authentication. The bundled console keeps the key
-in React memory only and never writes browser storage, cookies, URLs, or server
-configuration.
+Loading the page and its v0.1 management calls is unauthenticated. A Cursor key
+is sent only during import and is not returned to the browser afterward; the
+roster keeps only account ids and masked hints. The supplied compose files bind
+the console to `127.0.0.1`. An Internet-facing reverse proxy must authenticate
+and restrict `/console/` and `/v0/management/*`.
 
 ## Docker
 
 ```bash
 docker build -t cursor-sdk2api:local .
-docker run --rm -p 8080:8080 -e AUTH_MODE=byok cursor-sdk2api:local
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e AUTH_MODE=managed \
+  -e GATEWAY_ACCESS_KEY='replace-me' \
+  -v cursor-sdk2api-data:/data \
+  cursor-sdk2api:local
 ```
 
 `docker-compose.yml` is a single-service wrapper. It does not mount files from other projects and does not ship secrets.
@@ -42,7 +47,7 @@ build stage and copied into the runtime image.
 
 ```bash
 docker pull ghcr.io/sunnyender-org/cursor-sdk2api@sha256:<digest>
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/sunnyender-org/cursor-sdk2api@sha256:<digest>
 ```
 
@@ -87,10 +92,11 @@ Session/registry TTL and the periodic sweep share the same clock. Completed line
 
 Completed follow-up with `x-cursor-session-id` can `Agent.resume` within the session TTL if credential and model match. Pending tool callbacks are never restored.
 
-## BYOK vs managed
+## Unified gateway key and BYOK
 
 - BYOK: clients send a Cursor API key. Suitable for a trusted local sidecar.
-- Managed: set `AUTH_MODE=managed`, `CURSOR_API_KEY`, and a different `GATEWAY_ACCESS_KEY`.
+- Managed pool: set `AUTH_MODE=managed` and `GATEWAY_ACCESS_KEY`, then import one or more Cursor keys in `/console/`. `CURSOR_API_KEY` is optional and only seeds the persistent pool.
+- New sessions use model-aware round-robin across compatible accounts. Tool continuation, completed follow-up, and restart recovery stay bound to the original credential fingerprint.
 
 BYOK credentials share the gateway process and capacity limits, but their official SDK stores and empty workspace directories are separated by credential fingerprint. This is process-local tenant isolation, not a claim of hardened hostile multi-tenant hosting; public Internet deployment still requires TLS, access controls, encrypted state, monitoring, and an explicit operator threat model.
 
@@ -105,7 +111,7 @@ In-process SDK Run handles and pending tool Promises cannot move to another proc
 
 A load balancer that retries a pending continuation onto a new replica will see `409 cursor_session_lost`. That is the correct failure, not a successful empty turn.
 
-Completed follow-up after restart requires the same `STATE_DIR` volume, `x-cursor-session-id`, and matching credential/model.
+Completed follow-up after restart requires the same `STATE_DIR` volume, `x-cursor-session-id`, and the original account still present in the pool.
 
 ## Resource defaults
 

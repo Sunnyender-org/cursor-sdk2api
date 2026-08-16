@@ -3,7 +3,7 @@
   "channel": {
     "type": 14,
     "name": "Cursor SDK - Anthropic",
-    "key": "<CURSOR_API_KEY_OR_GATEWAY_ACCESS_KEY>",
+    "key": "<GATEWAY_ACCESS_KEY>",
     "base_url": "http://gateway:8080",
     "models": "claude-sonnet-4-6",
     "group": "default",

@@ -17,7 +17,7 @@
 
 ### Not Building
 
-- 不实现用户充值、计费、分组、渠道调度、账号池或多租户管理后台。
+- 不实现用户充值、计费、分组、跨供应商渠道调度或多租户管理后台；仅保留 Cursor 凭据池与统一网关 Key。
 - 不逆向 Cursor 私有 H2、ConnectRPC、浏览器 Cookie 或 IDE OAuth 会话。
 - 不把 Node.js 或 `@cursor/sdk` 内嵌进 new-api 主进程。
 - 不默认开放 Cursor 的 shell、read、edit、task、web 或项目 settings。
@@ -39,7 +39,7 @@
 
 ### 2.3 User Jobs
 
-- 用一个 Cursor API Key 启动本地网关，并看到实时模型目录。
+- 用一把统一网关 Key 启动服务，导入一个或多个 Cursor API Key，并看到账号池的实时模型目录。
 - 将 Claude Code 的 base URL 指向网关，完成多轮和工具任务。
 - 让多个客户端以标准 Messages、Chat 或 Responses 协议使用同一套 Cursor 模型。
 - 部署在 Docker 中，查看 health、能力位和无敏感信息的运行指标。
@@ -267,8 +267,9 @@ v0.1 规则：
 
 ### 9.2 Managed Key — Optional
 
-- 服务器通过环境或 secret mount 配置 Cursor API Key。
-- 客户端使用独立 gateway access key。
+- 客户端统一使用独立 gateway access key。
+- Cursor API Key 通过控制台导入持久化账号池；环境变量只作为可选 seed。
+- 新会话按模型兼容性 round-robin；工具续轮与 resume 固定原账号。
 - gateway key 与 Cursor key 必须是不同 secret namespace。
 - health 不透露 managed mode 的 Cursor identity。
 

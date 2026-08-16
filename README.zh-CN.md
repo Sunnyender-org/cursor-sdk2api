@@ -16,6 +16,10 @@
 
 `cursor-sdk2api` 把公开发布的 [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) 转成 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses API。底层直接使用 Cursor 官方 Agent harness，不抓浏览器 Cookie，不逆向私有传输，也不套 CLI 登录态。
 
+<p align="center">
+  <img src="docs/assets/console-accounts.jpg" alt="cursor-sdk2api 多账号运维控制台">
+</p>
+
 ## 核心能力
 
 - **Claude Code** 走 `/v1/messages`：SSE、工具、并行与多轮续轮、cache usage、resume、token 估算。
@@ -26,28 +30,28 @@
 - **Claude 1M 模式：** Cursor 实时目录暴露 `context=1m` 时，包括 Sonnet 4.6、Fable 5，网关会把官方 SDK 参数原样转发。
 - **客户端原生工具：** 文件、shell、网页和网络工具仍由 Claude Code、Grok 或 Codex 在你的本机工作区执行。
 - **一套工具引擎：** 三种协议共用同一个 Cursor SDK Run、并行工具、续轮、replay 和 session coordinator。
-- **运维能力：** 实时模型目录、账号身份、Dashboard 额度、账号持久化、Web 控制台、Docker、HTTP(S) 出站代理。
+- **一把网关 Key，多账号共用：** Cursor 账号池持久化、按模型 round-robin、续轮粘性、Dashboard 额度、Web 控制台和 Docker。
 - **已集成 new-api：** 已提供外置部署、渠道模板、compose E2E 和验收 smoke。[直接查看 new-api 接入指南](docs/NEW_API_INTEGRATION.md)。
 
 > Cursor 通路里的 Grok 不提供 xAI 原生 `x_search`。客户端自己的网页和网络搜索仍可作为普通 function tool 使用。
 
 ## 快速开始
 
-需要 Node.js 22.19 或更新版本，以及 Cursor User API Key。
+需要 Node.js 22.19 或更新版本、一把网关 Key，以及至少一个用于导入的 Cursor User API Key。
 
 ```bash
 git clone https://github.com/Sunnyender-org/cursor-sdk2api.git
 cd cursor-sdk2api
 npm ci
 npm run build
-AUTH_MODE=byok node dist/index.js
+AUTH_MODE=managed GATEWAY_ACCESS_KEY='replace-me' node dist/index.js
 ```
 
-打开 [http://localhost:8080/console/](http://localhost:8080/console/)，或直接请求 API：
+打开 [http://localhost:8080/console/](http://localhost:8080/console/)，导入一个或多个 Cursor 账号，之后所有账号统一使用同一把网关 Key：
 
 ```bash
 curl http://localhost:8080/v1/models \
-  -H "Authorization: Bearer $CURSOR_API_KEY"
+  -H "Authorization: Bearer $GATEWAY_ACCESS_KEY"
 ```
 
 Docker：
@@ -64,7 +68,7 @@ Cursor 需要代理时，设置 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`。�
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_AUTH_TOKEN="$CURSOR_API_KEY"
+export ANTHROPIC_AUTH_TOKEN="$GATEWAY_ACCESS_KEY"
 export ANTHROPIC_MODEL=claude-sonnet-4-6
 claude
 ```
@@ -75,7 +79,7 @@ claude
 [model.cursor]
 name = "cursor-sdk2api"
 base_url = "http://127.0.0.1:8080/v1"
-api_key = "<cursor-api-key>"
+api_key = "<gateway-key>"
 model = "grok-4.6"
 api_backend = "responses"
 ```
@@ -90,7 +94,7 @@ model_provider = "cursor-sdk2api"
 name = "cursor-sdk2api"
 base_url = "http://127.0.0.1:8080/v1"
 wire_api = "responses"
-env_key = "CURSOR_API_KEY"
+env_key = "GATEWAY_ACCESS_KEY"
 ```
 
 目前不支持强制依赖 `previous_response_id`、远端 response store 或 OpenAI 托管工具的 Responses 客户端。
@@ -108,15 +112,17 @@ env_key = "CURSOR_API_KEY"
 
 - `/console/`：本地运维控制台
 - `/v1/models`：Cursor 实时模型目录
-- `/v1/account`：Cursor 身份和当前 Dashboard 用量
+- `/v1/account`：managed 模式下所有 Cursor 账号身份与当前 Dashboard 用量
 - `/health`：能力、SDK 版本和代理传输状态
 - `STATE_DIR`：账号、SDK store 和 resume 状态
 
-`v0.1` 是可信单进程 sidecar。账号管理接口没有单独认证，并可能返回已保存的 Cursor Key。请只绑定回环地址，或在外层增加 TLS 和认证代理。
+Managed 模式沿用 CPA 的客户端 Key 与上游凭据分离方式：客户端只拿到 `GATEWAY_ACCESS_KEY`，导入的 Cursor Key 留在网关账号池。新会话按模型 round-robin，工具续轮和 resume 始终固定原账号。BYOK 仅作为可信单用户 sidecar 的兼容模式保留。
+
+`v0.1` 是可信单进程 sidecar。账号管理接口没有单独认证；导入的 Cursor Key 会保存在仅 Owner 可读的状态文件中，导入后不会再返回给浏览器。随附 compose 已把控制台绑定到本机回环；任何公网反代都必须认证并限制 `/console/` 与 `/v0/management/*`。
 
 ## 验证
 
-确定性测试共 156 项。有日期、已脱敏的真实验收覆盖 Sonnet 4.6、Fable 5、Composer 2.5 和 Grok 4.6 xhigh：[live smoke 回执](docs/evidence/2026-08-15-live-smoke.md)。
+确定性测试共 167 项。有日期、已脱敏的真实验收覆盖 Sonnet 4.6、Fable 5、Composer 2.5 和 Grok 4.6 xhigh：[live smoke 回执](docs/evidence/2026-08-15-live-smoke.md)。
 
 ```bash
 npm run typecheck

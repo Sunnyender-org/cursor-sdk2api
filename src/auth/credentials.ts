@@ -10,30 +10,41 @@ export interface AuthContext {
   fingerprint: string;
 }
 
-export function authenticate(req: IncomingMessage, config: GatewayConfig): AuthContext {
+export type ClientAuthorization =
+  | { mode: "byok"; auth: AuthContext }
+  | { mode: "managed" };
+
+export function authorizeClient(req: IncomingMessage, config: GatewayConfig): ClientAuthorization {
   const presented = presentedSecret(req);
   if (!presented) {
     throw authenticationError("Provide Authorization: Bearer or x-api-key");
   }
 
   if (config.authMode === "managed") {
-    if (!config.gatewayAccessKey || !config.managedCursorKey) {
+    if (!config.gatewayAccessKey) {
       throw authenticationError("Managed auth is not configured");
     }
     if (presented !== config.gatewayAccessKey) {
       throw authenticationError("Invalid gateway access key");
     }
-    return {
-      mode: "managed",
-      cursorApiKey: config.managedCursorKey,
-      fingerprint: credentialFingerprint(presented),
-    };
+    return { mode: "managed" };
   }
 
   return {
     mode: "byok",
-    cursorApiKey: presented,
-    fingerprint: credentialFingerprint(presented),
+    auth: {
+      mode: "byok",
+      cursorApiKey: presented,
+      fingerprint: credentialFingerprint(presented),
+    },
+  };
+}
+
+export function managedAccountAuth(apiKey: string): AuthContext {
+  return {
+    mode: "managed",
+    cursorApiKey: apiKey,
+    fingerprint: credentialFingerprint(apiKey),
   };
 }
 

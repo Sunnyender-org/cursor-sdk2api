@@ -33,7 +33,9 @@ export interface FakeSdkOptions {
   /** Per-agent script sets, consumed in create/resume order. */
   agentScripts?: FakeStep[][][];
   models?: SdkCatalogResult;
+  modelsByApiKey?: Record<string, SdkCatalogResult>;
   account?: SdkAccountResult;
+  accountsByApiKey?: Record<string, SdkAccountResult>;
   sdkVersion?: string;
   finalUsage?: SdkUsage;
   liveUsage?: SdkUsage;
@@ -297,7 +299,9 @@ export class FakeSdk implements SdkRuntime {
   models: SdkCatalogResult;
   account: SdkAccountResult;
   listModelsCalls = 0;
+  readonly listModelsApiKeys: string[] = [];
   getAccountCalls = 0;
+  readonly getAccountApiKeys: string[] = [];
   private agentScriptIndex = 0;
 
   constructor(private readonly options: FakeSdkOptions = {}) {
@@ -352,13 +356,15 @@ export class FakeSdk implements SdkRuntime {
     return agent;
   }
 
-  async listModels(): Promise<SdkCatalogResult> {
+  async listModels(apiKey: string): Promise<SdkCatalogResult> {
     this.listModelsCalls += 1;
-    return this.models;
+    this.listModelsApiKeys.push(apiKey);
+    return this.options.modelsByApiKey?.[apiKey] ?? this.models;
   }
 
-  async getAccount(): Promise<SdkAccountResult> {
+  async getAccount(apiKey: string): Promise<SdkAccountResult> {
     this.getAccountCalls += 1;
-    return this.account;
+    this.getAccountApiKeys.push(apiKey);
+    return this.options.accountsByApiKey?.[apiKey] ?? this.account;
   }
 }

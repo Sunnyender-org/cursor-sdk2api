@@ -1,17 +1,34 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { authenticate } from "../auth/credentials.js";
+import { CursorAccountPool } from "../auth/account-pool.js";
+import {
+  authorizeClient,
+  managedAccountAuth,
+  type AuthContext,
+  type ClientAuthorization,
+} from "../auth/credentials.js";
 import { readAccount } from "../account/service.js";
-import { CursorAccountFileStore } from "../account/file-store.js";
+import { CursorAccountFileStore, type StoredCursorAccount } from "../account/file-store.js";
 import type { Clock } from "../clock.js";
 import type { GatewayConfig } from "../config.js";
 import { RunCoordinator } from "../core/run-coordinator.js";
 import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
 import { SessionRegistry } from "../core/session-registry.js";
-import { GatewayError, invalidRequest, notFound, redactSecrets, toPublicErrorBody } from "../errors.js";
+import {
+  forbiddenError,
+  GatewayError,
+  invalidRequest,
+  notFound,
+  rateLimited,
+  redactSecrets,
+  sessionLost,
+  toPublicErrorBody,
+  upstreamError,
+} from "../errors.js";
 import { requestId as newRequestId } from "../ids.js";
 import type { Logger } from "../log.js";
 import { parseMessagesRequest } from "../protocols/anthropic/parse.js";
+import type { ParsedMessages } from "../protocols/anthropic/types.js";
 import { estimateAnthropicInputTokens } from "../protocols/anthropic/count-tokens.js";
 import { writeSseError } from "../protocols/anthropic/sse.js";
 import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
@@ -36,6 +53,42 @@ export interface App {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   listen(): Server;
   beginShutdown(): void;
+}
+
+async function listManagedModels(accounts: StoredCursorAccount[], catalog: ModelCatalog): Promise<{
+  status: "ok" | "unavailable" | "stale";
+  reason?: string;
+  models: Awaited<ReturnType<ModelCatalog["list"]>>["models"];
+  stale: boolean;
+}> {
+  if (accounts.length === 0) {
+    return {
+      status: "unavailable",
+      reason: "cursor_account_pool_empty",
+      models: [],
+      stale: false,
+    };
+  }
+  const results = await Promise.all(
+    accounts.map((account) => catalog.list(account.apiKey, managedAccountAuth(account.apiKey).fingerprint)),
+  );
+  const models = new Map<string, Awaited<ReturnType<ModelCatalog["list"]>>["models"][number]>();
+  for (const listed of results) {
+    for (const model of listed.models) {
+      if (!models.has(model.id)) models.set(model.id, model);
+    }
+  }
+  const hasOk = results.some((listed) => listed.status === "ok");
+  const hasStale = results.some((listed) => listed.status === "stale");
+  const status = hasOk ? "ok" : hasStale ? "stale" : "unavailable";
+  return {
+    status,
+    ...(status === "unavailable"
+      ? { reason: results.map((listed) => listed.reason).find(Boolean) ?? "cursor_models_list_unavailable" }
+      : {}),
+    models: [...models.values()],
+    stale: !hasOk && hasStale,
+  };
 }
 
 export function createApp(input: {
@@ -68,6 +121,79 @@ export function createApp(input: {
   });
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
   const accounts = new CursorAccountFileStore(config.stateDir, config.managedCursorKey);
+  const accountPool = new CursorAccountPool();
+
+  const boundCredentialFingerprint = (parsed: ParsedMessages, sessionHint?: string): string | undefined => {
+    if (parsed.continuation) {
+      const ids = parsed.continuation.map((result) => result.toolUseId);
+      const lookup = registry.lookupByToolIds(ids);
+      if (!lookup.mixed && lookup.session) return lookup.session.credentialFingerprint;
+      const record = lineage.findByToolIds(ids);
+      if (record) return record.credentialFingerprint;
+    }
+    if (sessionHint) {
+      return registry.get(sessionHint)?.credentialFingerprint ?? lineage.get(sessionHint)?.credentialFingerprint;
+    }
+    return undefined;
+  };
+
+  const resolveManagedAuth = async (
+    parsed?: ParsedMessages,
+    sessionHint?: string,
+  ): Promise<AuthContext> => {
+    const boundFingerprint = parsed ? boundCredentialFingerprint(parsed, sessionHint) : undefined;
+    if (boundFingerprint) {
+      const bound = accounts.findByFingerprint(boundFingerprint);
+      if (!bound) throw sessionLost("The Cursor account bound to this session is no longer configured");
+      return managedAccountAuth(bound.apiKey);
+    }
+
+    const configured = accounts.list();
+    if (configured.length === 0) {
+      throw upstreamError("No Cursor accounts are configured in the gateway pool", 503);
+    }
+    let candidates = configured;
+    if (parsed) {
+      const checked = await Promise.all(
+        configured.map(async (account) => ({
+          account,
+          catalog: await catalog.list(account.apiKey, managedAccountAuth(account.apiKey).fingerprint),
+        })),
+      );
+      candidates = checked
+        .filter(({ catalog: listed }) => listed.models.some((model) => model.id === parsed.model))
+        .map(({ account }) => account);
+      if (candidates.length === 0) {
+        if (checked.some(({ catalog: listed }) => listed.status === "unavailable")) {
+          throw upstreamError("Cursor model catalogs are unavailable across the configured account pool", 503);
+        }
+        throw forbiddenError(`Model ${parsed.model} is unavailable across the configured Cursor accounts`);
+      }
+    }
+
+    candidates = candidates.filter(
+      (account) =>
+        registry.activeRunCountForCredential(managedAccountAuth(account.apiKey).fingerprint) <
+        config.perCredentialActiveRuns,
+    );
+    if (candidates.length === 0) {
+      throw rateLimited(
+        parsed
+          ? `All Cursor accounts compatible with ${parsed.model} are at active run capacity`
+          : "All Cursor accounts are at active run capacity",
+      );
+    }
+
+    const selected = accountPool.pick(candidates, parsed?.model ?? "account");
+    if (!selected) throw upstreamError("No Cursor account is available", 503);
+    return managedAccountAuth(selected.apiKey);
+  };
+
+  const resolveAuth = async (
+    client: ClientAuthorization,
+    parsed?: ParsedMessages,
+    sessionHint?: string,
+  ): Promise<AuthContext> => client.mode === "byok" ? client.auth : resolveManagedAuth(parsed, sessionHint);
   let shuttingDown = false;
   const sweepTimer = setInterval(() => {
     try {
@@ -133,6 +259,75 @@ export function createApp(input: {
         return;
       }
 
+      if (path === "/v0/management/accounts/probe" && method === "GET") {
+        const id = new URL(req.url ?? "/", "http://localhost").searchParams.get("id")?.trim() ?? "";
+        if (!id) throw invalidRequest("id is required");
+        const stored = accounts.get(id);
+        if (!stored) throw notFound("Persistent account was not found");
+        const auth = managedAccountAuth(stored.apiKey);
+        const [models, account] = await Promise.all([
+          catalog.list(stored.apiKey, auth.fingerprint),
+          readAccount(sdk, stored.apiKey),
+        ]);
+        sendJson(res, 200, {
+          models: {
+            object: "list",
+            data: models.models.map((model) => ({
+              id: model.id,
+              object: "model",
+              display_name: model.displayName,
+              description: model.description,
+              parameters: model.parameters,
+              variants: model.variants,
+            })),
+            status: models.status,
+            ...(models.reason ? { reason: models.reason } : {}),
+            cache: { stale: models.stale, ...(models.stale ? { reason: models.reason ?? "refresh_failed" } : {}) },
+          },
+          account,
+        }, requestId);
+        return;
+      }
+
+      if (path === "/v0/management/accounts/run" && method === "POST") {
+        const body = await readJsonBody(req, config.maxBodyBytes) as {
+          account_id?: unknown;
+          protocol?: unknown;
+          request?: unknown;
+        } | undefined;
+        const id = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        const protocol = body?.protocol;
+        if (!id) throw invalidRequest("account_id is required");
+        const stored = accounts.get(id);
+        if (!stored) throw notFound("Persistent account was not found");
+        if (!body || body.request === undefined) throw invalidRequest("request is required");
+        const auth = managedAccountAuth(stored.apiKey);
+        if (protocol === "messages") {
+          const parsed = parseMessagesRequest(body.request);
+          await coordinator.handleMessages(req, res, auth, parsed, requestId);
+          return;
+        }
+        if (protocol === "chat") {
+          const chat = parseChatCompletionsRequest(body.request);
+          await coordinator.handleMessages(
+            req,
+            res,
+            auth,
+            chat.parsed,
+            requestId,
+            undefined,
+            createChatWriterFactory({ includeUsage: chat.includeUsage }),
+          );
+          return;
+        }
+        if (protocol === "responses") {
+          const responses = parseResponsesRequest(body.request);
+          await coordinator.handleMessages(req, res, auth, responses.parsed, requestId, undefined, createResponsesWriterFactory());
+          return;
+        }
+        throw invalidRequest("protocol must be messages, chat, or responses");
+      }
+
       if (path === "/v0/management/accounts") {
         if (method === "GET") {
           sendJson(
@@ -141,7 +336,6 @@ export function createApp(input: {
             {
               accounts: accounts.list().map((account) => ({
                 id: account.id,
-                api_key: account.apiKey,
                 key_hint: account.keyHint,
                 added_at: account.addedAt,
               })),
@@ -161,7 +355,6 @@ export function createApp(input: {
             {
               account: {
                 id: account.id,
-                api_key: account.apiKey,
                 key_hint: account.keyHint,
                 added_at: account.addedAt,
               },
@@ -180,8 +373,10 @@ export function createApp(input: {
       }
 
       if (method === "GET" && path === "/v1/models") {
-        const auth = authenticate(req, config);
-        const listed = await catalog.list(auth.cursorApiKey, auth.fingerprint);
+        const client = authorizeClient(req, config);
+        const listed = client.mode === "byok"
+          ? await catalog.list(client.auth.cursorApiKey, client.auth.fingerprint)
+          : await listManagedModels(accounts.list(), catalog);
         sendJson(
           res,
           listed.status === "unavailable" ? 200 : 200,
@@ -200,6 +395,7 @@ export function createApp(input: {
             cache: listed.stale
               ? { stale: true, reason: listed.reason ?? "refresh_failed" }
               : { stale: false },
+            ...(client.mode === "managed" ? { account_pool_size: accounts.list().length } : {}),
           },
           requestId,
         );
@@ -207,14 +403,26 @@ export function createApp(input: {
       }
 
       if (method === "GET" && path === "/v1/account") {
-        const auth = authenticate(req, config);
-        const account = await readAccount(sdk, auth.cursorApiKey);
-        sendJson(res, 200, account, requestId);
+        const client = authorizeClient(req, config);
+        if (client.mode === "byok") {
+          const account = await readAccount(sdk, client.auth.cursorApiKey);
+          sendJson(res, 200, account, requestId);
+        } else {
+          const configured = accounts.list();
+          const details = await Promise.all(
+            configured.map(async (account) => ({
+              id: account.id,
+              key_hint: account.keyHint,
+              account: await readAccount(sdk, account.apiKey),
+            })),
+          );
+          sendJson(res, 200, { pool: true, account_count: details.length, accounts: details }, requestId);
+        }
         return;
       }
 
       if (method === "POST" && path === "/v1/messages/count_tokens") {
-        authenticate(req, config);
+        authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
         const parsed = parseMessagesRequest(body);
@@ -224,21 +432,23 @@ export function createApp(input: {
       }
 
       if (method === "POST" && path === "/v1/messages") {
-        const auth = authenticate(req, config);
+        const client = authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
         const parsed = parseMessagesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
+        const auth = await resolveAuth(client, parsed, sessionHint);
         await coordinator.handleMessages(req, res, auth, parsed, requestId, sessionHint);
         return;
       }
 
       if (method === "POST" && path === "/v1/chat/completions") {
-        const auth = authenticate(req, config);
+        const client = authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
         const chat = parseChatCompletionsRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
+        const auth = await resolveAuth(client, chat.parsed, sessionHint);
         await coordinator.handleMessages(
           req,
           res,
@@ -252,11 +462,12 @@ export function createApp(input: {
       }
 
       if (method === "POST" && path === "/v1/responses") {
-        const auth = authenticate(req, config);
+        const client = authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
         const responses = parseResponsesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
+        const auth = await resolveAuth(client, responses.parsed, sessionHint);
         await coordinator.handleMessages(
           req,
           res,

@@ -3,7 +3,7 @@
   "channel": {
     "type": 1,
     "name": "Cursor SDK - OpenAI compatible",
-    "key": "<CURSOR_API_KEY_OR_GATEWAY_ACCESS_KEY>",
+    "key": "<GATEWAY_ACCESS_KEY>",
     "base_url": "http://gateway:8080",
     "models": "grok-4.6,composer-2.5",
     "group": "default",

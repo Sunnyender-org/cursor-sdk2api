@@ -124,10 +124,10 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
   };
 
   if (authMode === "managed") {
-    if (!config.managedCursorKey || !config.gatewayAccessKey) {
-      throw new Error("AUTH_MODE=managed requires CURSOR_API_KEY and GATEWAY_ACCESS_KEY");
+    if (!config.gatewayAccessKey) {
+      throw new Error("AUTH_MODE=managed requires GATEWAY_ACCESS_KEY");
     }
-    if (config.managedCursorKey === config.gatewayAccessKey) {
+    if (config.managedCursorKey && config.managedCursorKey === config.gatewayAccessKey) {
       throw new Error("GATEWAY_ACCESS_KEY must be a different secret from CURSOR_API_KEY");
     }
   }

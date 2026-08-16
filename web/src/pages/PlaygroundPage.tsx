@@ -1,4 +1,3 @@
-import { maskKey } from "../accounts";
 import { protocolEndpoint } from "../api";
 import { Button } from "../bflabs/Button";
 import { Tabs } from "../bflabs/Tabs";
@@ -62,7 +61,7 @@ export function PlaygroundPage({
           {roster.length === 0 ? <option value="">{t.waiting}</option> : null}
           {roster.map((item) => (
             <option key={item.id} value={item.id}>
-              {identityLabel(item.account, maskKey(item.key))}
+              {identityLabel(item.account, item.keyHint)}
             </option>
           ))}
         </select>
@@ -113,7 +112,7 @@ export function PlaygroundPage({
           <textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} />
         </label>
         <div className="sendrow">
-          <Button type="submit" variant="primary" size="sm" loading={runState === "loading"} disabled={!active?.key || !selectedModel || runState === "loading"}>
+          <Button type="submit" variant="primary" size="sm" loading={runState === "loading"} disabled={!active || !selectedModel || runState === "loading"}>
             {runState === "loading" ? t.sending : t.send}
           </Button>
         </div>

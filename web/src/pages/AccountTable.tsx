@@ -1,4 +1,3 @@
-import { maskKey } from "../accounts";
 import { Button } from "../bflabs/Button";
 import { catalogHasFable5 } from "../fable5";
 import { hrefFor } from "../nav";
@@ -61,8 +60,8 @@ export function AccountTable({
               <tr key={item.id}>
                 <td>
                   <a className="row-link" href={hrefFor("account", item.id)}>
-                    <strong>{identityLabel(item.account, maskKey(item.key))}</strong>
-                    <span className="sub">{item.account?.identity?.api_key_name || maskKey(item.key)}</span>
+                    <strong>{identityLabel(item.account, item.keyHint)}</strong>
+                    <span className="sub">{item.account?.identity?.api_key_name || item.keyHint}</span>
                   </a>
                 </td>
                 <td>

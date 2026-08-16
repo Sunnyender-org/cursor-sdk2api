@@ -15,7 +15,7 @@ Outer agents (Claude Code, Grok Build) execute their own local file tools in the
 
 | Surface | v0.1 | Notes |
 |---|---|---|
-| `GET /console/` | optional | Static BF Labs Operator Console served by the gateway. It does not add billing, users, channel pools, credential persistence, or a second production process. |
+| `GET /console/` | optional | Static BF Labs Operator Console served by the gateway. It manages the persistent Cursor account pool but does not add billing, users, or a second production process. |
 | `POST /v1/messages` non-stream text | yes | |
 | SSE text / thinking | yes | Incremental forwarding via official `SendOptions.onDelta` (`text-delta` / `thinking-delta`). `run.stream()` is reserved for tool/status/terminal. Live model granularity is unverified. |
 | images (base64) | yes | Mapped to SDK `images` |
@@ -27,8 +27,8 @@ Outer agents (Claude Code, Grok Build) execute their own local file tools in the
 | completed `x-cursor-session-id` follow-up | yes | Store + `Agent.resume` within TTL |
 | pending tool restart | yes | Exact credential/model/tool batch resumes with persisted SDK Agent lineage and `local.force=true` |
 | duplicate-same after restart | no | Digest only; no persisted assistant replay |
-| `/v1/models` | yes | Exact catalog ids or honest empty |
-| `/v1/account` | yes | `Cursor.me()` identity plus real Cursor Dashboard period usage from the same User API Key; partial with a reason when dashboard usage is unavailable |
+| `/v1/models` | yes | BYOK returns one account catalog. Managed mode returns the union of exact catalog ids across the pool. |
+| `/v1/account` | yes | BYOK returns one account. Managed mode returns every pooled identity and real Cursor Dashboard period usage without exposing raw keys. |
 | `/v1/messages/count_tokens` | estimated | Conservative local context-sizing estimate for Claude Code; response header marks it estimated and final SDK usage remains authoritative |
 | `/v1/chat/completions` | yes | Protocol adapter over the same Messages run engine. Contract-tested: non-stream text, OpenAI SSE `data:` chunks + `[DONE]`, `reasoning_content`, function tools, single/parallel continuation, duplicate-same replay, deferred/final cache-aware usage, `stream_options.include_usage`, `reasoning_effort` / `cursor_model_params`, base64 `image_url`, `n=1` only, unknown tool IDs fail closed, and OpenAI error shapes before and after stream start. Remote `image_url` URLs are `422`. Live Chat model matrix is not claimed. |
 | `/v1/responses` | yes | Protocol adapter over the same Messages run engine. Contract-tested: non-stream text; Responses SSE lifecycle (`response.created` → deltas → `response.completed`); reasoning summary events; base64 `input_image`; `tools` `type=function`; same-turn parallel `function_call` items; full-history `function_call_output` continuation by the latest trailing `call_id` batch; duplicate-same replay; deferred/final cache-aware usage; `reasoning`/`reasoning_effort` / `cursor_model_params`; unknown/mixed/missing `call_id` fail closed; OpenAI REST errors before stream start and a Responses `error` event after stream start. Tool outputs accept a string or text-content array; image/file tool-output parts are `422` until native SDK mapping is implemented. `previous_response_id`, `store=true`, background, conversation, remote image URLs, and hosted tools fail closed. The known optional `reasoning.encrypted_content` include is accepted but omitted; unknown include expansions fail closed. Completed Responses `usage` always includes cache and reasoning detail objects. Grok 4.6 Responses named-tool, same-turn parallel, client-workspace file tool, and kill/restart recovery have live acceptance evidence. |
@@ -39,6 +39,11 @@ Outer agents (Claude Code, Grok Build) execute their own local file tools in the
 | `cursor_model_params` | extension | Exact validated `{id,value}` pairs passed to the official SDK model selection. Explicit parameters are bound to the session and persisted for completed `Agent.resume`; an explicit change on the same session is `409 cursor_session_conflict`. |
 
 Completed follow-up and persisted `Agent.resume` consume the same global / per-credential active-run limits as `create`. Awaiting `tool_result` continuation does not.
+
+Managed mode follows CPA's separation of proxy client keys from upstream
+credentials. A valid `GATEWAY_ACCESS_KEY` selects compatible accounts with
+round-robin for new sessions. Pending tool IDs and `x-cursor-session-id` bind
+continuation to the original account, including persisted restart recovery.
 
 ## Responses continuation identity
 

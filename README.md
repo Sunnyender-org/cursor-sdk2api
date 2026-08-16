@@ -16,6 +16,10 @@
 
 `cursor-sdk2api` turns the published [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) into Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses APIs. It uses the official Cursor Agent harness, not browser cookies, private transports, or CLI session scraping.
 
+<p align="center">
+  <img src="docs/assets/console-accounts.jpg" alt="cursor-sdk2api multi-account operator console">
+</p>
+
 ## Highlights
 
 - **Claude Code** via `/v1/messages`: SSE, tools, parallel and multi-round continuation, cache usage, resume, token estimate.
@@ -26,28 +30,28 @@
 - **Claude 1M mode:** when Cursor's live catalog exposes `context=1m`, including on Sonnet 4.6 and Fable 5, the official SDK parameter is forwarded unchanged.
 - **Native client tools:** filesystem, shell, web, and network tools stay in Claude Code, Grok, or Codex and run in your local workspace.
 - **One tool engine:** all three protocols share the same Cursor SDK run, parallel-tool, continuation, replay, and session coordinator.
-- **Operator-ready:** live model catalog, account identity, Dashboard quota, persistent account files, web console, Docker, and outbound HTTP(S) proxy support.
+- **One gateway key, many accounts:** persistent Cursor account pool, model-aware round-robin, session-sticky continuation, Dashboard quota, web console, and Docker.
 - **new-api integrated:** ready-made external deployment, channel templates, compose E2E, and acceptance smoke. [Open the new-api guide](docs/NEW_API_INTEGRATION.md).
 
 > Cursor-routed Grok does not provide xAI-native `x_search`. Client-owned web and network tools still work as normal function tools.
 
 ## Quick start
 
-Requires Node.js 22.19 or newer and a Cursor User API Key.
+Requires Node.js 22.19 or newer, one gateway key, and at least one Cursor User API Key to import.
 
 ```bash
 git clone https://github.com/Sunnyender-org/cursor-sdk2api.git
 cd cursor-sdk2api
 npm ci
 npm run build
-AUTH_MODE=byok node dist/index.js
+AUTH_MODE=managed GATEWAY_ACCESS_KEY='replace-me' node dist/index.js
 ```
 
-Open [http://localhost:8080/console/](http://localhost:8080/console/) or call the API directly:
+Open [http://localhost:8080/console/](http://localhost:8080/console/), import one or more Cursor accounts, then call every account through the same gateway key:
 
 ```bash
 curl http://localhost:8080/v1/models \
-  -H "Authorization: Bearer $CURSOR_API_KEY"
+  -H "Authorization: Bearer $GATEWAY_ACCESS_KEY"
 ```
 
 Docker:
@@ -64,7 +68,7 @@ If Cursor needs a proxy, set `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`. The ga
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_AUTH_TOKEN="$CURSOR_API_KEY"
+export ANTHROPIC_AUTH_TOKEN="$GATEWAY_ACCESS_KEY"
 export ANTHROPIC_MODEL=claude-sonnet-4-6
 claude
 ```
@@ -75,7 +79,7 @@ claude
 [model.cursor]
 name = "cursor-sdk2api"
 base_url = "http://127.0.0.1:8080/v1"
-api_key = "<cursor-api-key>"
+api_key = "<gateway-key>"
 model = "grok-4.6"
 api_backend = "responses"
 ```
@@ -90,7 +94,7 @@ model_provider = "cursor-sdk2api"
 name = "cursor-sdk2api"
 base_url = "http://127.0.0.1:8080/v1"
 wire_api = "responses"
-env_key = "CURSOR_API_KEY"
+env_key = "GATEWAY_ACCESS_KEY"
 ```
 
 Responses clients that require `previous_response_id`, stored response objects, or hosted OpenAI tools are not supported yet.
@@ -108,15 +112,17 @@ Client tools are converted to SDK `local.customTools` through MCP. The model cho
 
 - `/console/`: local operator console
 - `/v1/models`: live Cursor model catalog
-- `/v1/account`: Cursor identity and current Dashboard usage
+- `/v1/account`: pooled Cursor identities and current Dashboard usage in managed mode
 - `/health`: capabilities, SDK version, and proxy transport mode
 - `STATE_DIR`: account, SDK store, and resume state
 
-`v0.1` is a trusted single-process sidecar. The management account endpoint has no separate authentication and can return stored Cursor keys. Keep it on loopback or behind TLS and an authentication proxy.
+Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin, while tool continuation and resume stay pinned to the original account. BYOK remains available for a trusted single-user sidecar.
+
+`v0.1` is a trusted single-process sidecar. The management account endpoint has no separate authentication. Imported Cursor keys are stored in owner-only state files and are never returned to the browser after import. The supplied compose files bind the console to loopback; authenticate and restrict `/console/` plus `/v0/management/*` at any Internet-facing proxy.
 
 ## Verification
 
-The deterministic suite contains 156 tests. The dated, redacted live receipt covers Sonnet 4.6, Fable 5, Composer 2.5, and Grok 4.6 xhigh: [live smoke evidence](docs/evidence/2026-08-15-live-smoke.md).
+The deterministic suite contains 167 tests. The dated, redacted live receipt covers Sonnet 4.6, Fable 5, Composer 2.5, and Grok 4.6 xhigh: [live smoke evidence](docs/evidence/2026-08-15-live-smoke.md).
 
 ```bash
 npm run typecheck

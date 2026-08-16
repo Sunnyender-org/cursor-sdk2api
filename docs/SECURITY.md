@@ -3,7 +3,7 @@
 ## Credentials
 
 - Default BYOK: the request bearer/`x-api-key` is the Cursor key.
-- Managed mode uses a distinct gateway access key. The two secrets must not be equal.
+- Managed mode uses one distinct gateway access key in front of a persistent Cursor account pool. The gateway key must not equal a seeded Cursor key.
 - Runtime keys are fingerprinted with SHA-256 and never written to logs, replay records, gateway lineage files, or error bodies. When Operator Console account persistence is enabled, the explicitly added raw Cursor keys are stored in owner-only JSON files under `STATE_DIR/auths`. The official `@cursor/sdk` `JsonlLocalAgentStore` also persists Agent conversation/checkpoints in its own format under credential-fingerprint partitions in `STATE_DIR/sdk-store`; each credential gets a private empty-workspace partition. The entire state volume is sensitive.
 
 ## Tool isolation
@@ -12,7 +12,7 @@ The API Compatibility Profile does not grant Cursor ambient filesystem or shell 
 
 ## Operator console
 
-`/console/` is a static UI served by the same process as the API. Its v0.1 account-management endpoint has no separate access key. Raw Cursor keys returned to the same-origin console remain in page memory, while account JSON files are plaintext secrets protected by `0700`/`0600` filesystem permissions. Prefer an encrypted state volume. Keep port `8080` on a trusted local network or place it behind TLS and an authentication proxy. If `CONSOLE_DIR` is overridden, keep it pointed at a dedicated, trusted build tree.
+`/console/` is a static UI served by the same process as the API. Its v0.1 account-management endpoint has no separate access key. A raw Cursor key is sent only once when an operator imports it; list, probe, and playground responses return an account id and masked hint, never the stored key. Account JSON files remain plaintext secrets protected by `0700`/`0600` filesystem permissions. The management API can add/remove pool credentials and run a probe, so the supplied compose files bind the console to `127.0.0.1` only. Prefer an encrypted state volume. An Internet-facing reverse proxy must authenticate and restrict `/console/` and `/v0/management/*`. If `CONSOLE_DIR` is overridden, keep it pointed at a dedicated, trusted build tree.
 
 ## Logging
 
@@ -28,7 +28,7 @@ separately protected environment secret.
 
 ## Threat notes
 
-- Cross-tenant continuation is rejected by credential fingerprint and model binding.
+- Managed requests authenticate with the gateway key, but SDK sessions bind to the selected Cursor credential fingerprint and model. Continuation cannot rotate to another account.
 - SDK stores and empty workspaces are partitioned by credential fingerprint with owner-only directories; a tenant never receives another tenant's partition path or Agent ID through the HTTP API.
 - Duplicate different tool results fail closed to avoid a second side effect.
 - After restart, pending continuations are `cursor_session_lost` rather than a silent new Agent.

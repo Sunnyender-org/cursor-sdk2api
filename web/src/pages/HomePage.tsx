@@ -1,4 +1,3 @@
-import { maskKey } from "../accounts";
 import { Button } from "../bflabs/Button";
 import { CountUp } from "../bflabs/CountUp";
 import { Reveal } from "../bflabs/Reveal";
@@ -88,10 +87,7 @@ export function HomePage({
               {first ? (
                 <p className="easy-key">
                   <span>{t.firstKey}</span>
-                  <code className="mono">{maskKey(first.key)}</code>
-                  <Button variant="quiet" size="sm" data-copied={copied === "home-key" ? "true" : undefined} onClick={() => onCopy("home-key", first.key)}>
-                    {copied === "home-key" ? t.copied : t.copy}
-                  </Button>
+                  <code className="mono">{first.keyHint}</code>
                 </p>
               ) : (
                 <p className="easy-key"><a href={hrefFor("accounts")}>{t.noKey}</a></p>

@@ -22,7 +22,7 @@ test("operator console sends a non-stream Responses request", async () => {
   let output = "";
 
   await runPrompt({
-    apiKey: "console-key",
+    accountId: "account-1",
     protocol: "responses",
     model: "claude-sonnet-4-6",
     prompt: "Console Responses check",
@@ -34,15 +34,18 @@ test("operator console sends a non-stream Responses request", async () => {
 
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-  expect(path).toBe("/v1/responses");
+  expect(path).toBe("/v0/management/accounts/run");
   expect(init.headers).toEqual({
-    authorization: "Bearer console-key",
     "content-type": "application/json",
   });
   expect(JSON.parse(String(init.body))).toEqual({
-    model: "claude-sonnet-4-6",
-    stream: false,
-    input: "Console Responses check",
+    account_id: "account-1",
+    protocol: "responses",
+    request: {
+      model: "claude-sonnet-4-6",
+      stream: false,
+      input: "Console Responses check",
+    },
   });
   expect(output).toContain('"id": "resp_console"');
 });
@@ -60,7 +63,7 @@ test("operator console renders Responses SSE bytes incrementally", async () => {
   const snapshots: string[] = [];
 
   await runPrompt({
-    apiKey: "console-key",
+    accountId: "account-1",
     protocol: "responses",
     model: "claude-sonnet-4-6",
     prompt: "Stream check",

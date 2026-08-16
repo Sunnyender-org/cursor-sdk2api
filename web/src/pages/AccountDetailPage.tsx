@@ -1,4 +1,3 @@
-import { maskKey } from "../accounts";
 import { Button } from "../bflabs/Button";
 import { catalogHasFable5, FABLE5_DASHBOARD, FABLE5_DOCS, modelLooksLikeFable5 } from "../fable5";
 import { hrefFor } from "../nav";
@@ -49,8 +48,8 @@ export function AccountDetailPage({
 
   return (
     <PageFrame
-      kicker={maskKey(item.key)}
-      title={identityLabel(item.account, maskKey(item.key))}
+      kicker={item.keyHint}
+      title={identityLabel(item.account, item.keyHint)}
       actions={
         <>
           <ActionLink href={hrefFor("accounts")}>{t.back}</ActionLink>

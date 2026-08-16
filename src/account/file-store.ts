@@ -66,6 +66,17 @@ export class CursorAccountFileStore {
     return accounts.sort((left, right) => left.addedAt - right.addedAt);
   }
 
+  findByFingerprint(fingerprint: string): StoredCursorAccount | undefined {
+    return this.list().find((account) => credentialFingerprint(account.apiKey) === fingerprint);
+  }
+
+  get(id: string): StoredCursorAccount | undefined {
+    const name = `${id}.json`;
+    if (!FILE_RE.test(name)) return undefined;
+    const account = this.read(join(this.dir, name));
+    return account ? this.toPublic(account) : undefined;
+  }
+
   add(rawApiKey: string): StoredCursorAccount {
     const apiKey = rawApiKey.trim();
     if (!apiKey) throw new Error("Cursor API key is required");

@@ -26,7 +26,8 @@ docker compose up -d --build
 ```
 
 Open `http://localhost:3000`, complete new-api's normal first-run setup, and
-create a new-api user token for client requests. The compose file does not
+open `http://localhost:8080/console/` to import one or more Cursor accounts.
+Then create a new-api user token for client requests. The compose file does not
 create an administrator, token, or channel, and it contains no working secret.
 For a private local smoke, choose new-api's **self-use** mode; current new-api
 accepts otherwise-unpriced model IDs in that mode. In operation mode, add
@@ -52,14 +53,10 @@ In **Channels > Add channel**, create:
 2. **OpenAI**: Base URL `http://gateway:8080`, models
    `grok-4.6,composer-2.5`.
 
-Set the channel key according to the gateway mode:
-
-- BYOK: the channel stores a Cursor User API Key. This is simplest for a
-  single trusted operator, but the raw upstream key is then present in the
-  new-api database.
-- managed: `gateway` receives `CURSOR_API_KEY`; both new-api channels store a
-  different `GATEWAY_ACCESS_KEY`. This reduces Cursor-key copies, but both
-  environment values still need secret-store protection.
+Use the same `GATEWAY_ACCESS_KEY` for both channels. new-api never stores a
+Cursor account key. The gateway chooses a compatible account from its
+persistent pool for each new session and keeps tool continuation and resume on
+that same account.
 
 The JSON files under `integrations/new-api/channel.*.template.json` document
 the current API fields. They intentionally contain a non-working placeholder;
@@ -67,7 +64,7 @@ replace it only in a local protected copy or use the UI. Do not commit the
 rendered channel payload.
 
 new-api clients authenticate with a **new-api user token** at port 3000. They
-must never receive the Cursor key or managed gateway access key.
+must never receive a Cursor account key or the gateway-to-new-api key.
 
 Channel availability and billing are separate settings in new-api. Saving the
 two channels with placeholder keys proves only the schema. A user request also
