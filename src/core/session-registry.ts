@@ -119,7 +119,8 @@ export class SessionRegistry {
     // later process can Agent.resume. Pending records also stay until TTL so
     // a restart tool_result is deterministically session_lost.
     const expireAt = this.clock.now() + this.limits.replayTtlMs;
-    for (const id of session.pending.keys()) {
+    for (const [id, ownerSessionId] of this.toolIndex) {
+      if (ownerSessionId !== session.sessionId) continue;
       this.toolIndex.delete(id);
       this.expiredToolIds.set(id, expireAt);
     }

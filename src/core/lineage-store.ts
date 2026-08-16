@@ -13,6 +13,7 @@ export interface LineageRecord {
   modelParams?: Array<{ id: string; value: string }>;
   state: LineageState;
   pendingToolIds: string[];
+  pendingCalls?: Array<{ toolUseId: string; name: string }>;
   lastResultDigest?: string;
   createdAt: number;
   lastActivityAt: number;
@@ -195,6 +196,19 @@ function isLineageRecord(value: unknown): value is LineageRecord {
     return false;
   }
   if (!Array.isArray(record.pendingToolIds) || record.pendingToolIds.some((id) => typeof id !== "string")) {
+    return false;
+  }
+  if (
+    record.pendingCalls !== undefined &&
+    (!Array.isArray(record.pendingCalls) ||
+      record.pendingCalls.some(
+        (call) =>
+          !call ||
+          typeof call !== "object" ||
+          typeof (call as Record<string, unknown>).toolUseId !== "string" ||
+          typeof (call as Record<string, unknown>).name !== "string",
+      ))
+  ) {
     return false;
   }
   if (typeof record.createdAt !== "number" || typeof record.lastActivityAt !== "number" || typeof record.expiresAt !== "number") {

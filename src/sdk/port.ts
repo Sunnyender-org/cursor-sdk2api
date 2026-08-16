@@ -95,6 +95,8 @@ export interface SdkSendInput {
   text: string;
   images?: Array<{ data: string; mimeType: string }>;
   customTools?: Record<string, SdkCustomTool>;
+  /** Expire a persisted active run before sending a recovered continuation. */
+  force?: boolean;
   /** Official SendOptions.onDelta mapping. */
   onDelta?: SdkDeltaHandler;
   /** Optional alias for the same incremental updates. */

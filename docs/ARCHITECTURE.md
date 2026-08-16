@@ -17,7 +17,7 @@ HTTP /v1/messages | /v1/chat/completions | /v1/responses
 
 `/v1/chat/completions` and `/v1/responses` do not own a second session or continuation engine. They reuse the same RunCoordinator, pending-tool Map, replay, and identity binding. Only the request parser and HTTP writer differ.
 
-Responses continuation is not `previous_response_id` reconstruction. Pending tool turns resume when the latest input items are only `function_call_output` and `call_id` matches the live `tool_use_id`. Completed follow-up still uses `x-cursor-session-id` exactly as Messages/Chat. `previous_response_id`, `store=true`, background, conversation, include expansions, and hosted built-in tools fail closed.
+Responses continuation is not `previous_response_id` reconstruction. The parser accepts a full Responses transcript and treats only the latest trailing `function_call_output` batch as the continuation. Completed follow-up still uses `x-cursor-session-id` exactly as Messages/Chat. `previous_response_id`, `store=true`, background, conversation, and hosted built-in tools fail closed. The known optional `reasoning.encrypted_content` include is accepted but omitted; unknown expansions fail closed.
 
 Text/thinking streaming uses official `SendOptions.onDelta` (`text-delta` / `thinking-delta`). Early deltas that arrive before `send()` resolves are buffered, then ingested into the pump. When onDelta is active, `run.stream()` assistant/thinking snapshots are not forwarded again.
 
@@ -46,7 +46,7 @@ Pending calls live in a `Map<toolUseId, PendingCall>`. There is no single-pendin
 
 SDK Agent history lives in credential-partitioned `$STATE_DIR/sdk-store/<fingerprint>` directories via the official `JsonlLocalAgentStore`. Each credential also receives a private empty-workspace partition. Gateway lineage (`$STATE_DIR/lineage`) keeps only resume metadata: session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids, optional result digest, and timestamps.
 
-Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. Pending tool callbacks are ordinary in-memory Promises and are not serialized. After owner death they stay `409 cursor_session_lost` until the pending record expires. Assistant replay bodies are not persisted, so duplicate-same after restart is also `session_lost`.
+Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. Pending callback Promises are not serialized; the lineage stores only tool ids and names. After owner death, an exact credential/model/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
 
 ## Injection
 

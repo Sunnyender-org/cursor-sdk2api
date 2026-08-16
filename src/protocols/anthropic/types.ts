@@ -44,6 +44,7 @@ export interface UsageView {
   output_tokens: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
+  reasoning_tokens?: number;
   usage_deferred?: boolean;
   usage_status?: "sdk" | "unavailable" | "deferred";
 }
@@ -73,4 +74,5 @@ export interface ParsedMessages {
   images: Array<{ data: string; mimeType: string }>;
   lastUser: AnthropicMessage | undefined;
   continuation: ParsedToolResult[] | undefined;
+  toolChoice: import("../tool-choice.js").ToolChoicePolicy;
 }

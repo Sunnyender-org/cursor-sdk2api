@@ -7,7 +7,7 @@ import { RunCoordinator } from "../core/run-coordinator.js";
 import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
 import { SessionRegistry } from "../core/session-registry.js";
-import { GatewayError, invalidRequest, notFound, toPublicErrorBody } from "../errors.js";
+import { GatewayError, invalidRequest, notFound, redactSecrets, toPublicErrorBody } from "../errors.js";
 import { requestId as newRequestId } from "../ids.js";
 import type { Logger } from "../log.js";
 import { parseMessagesRequest } from "../protocols/anthropic/parse.js";
@@ -111,7 +111,7 @@ export function createApp(input: {
             capabilities: {
               ...config.capabilities,
               agent_resume: config.capabilities.agent_resume,
-              pending_tool_restart_resume: false,
+              pending_tool_restart_resume: config.capabilities.pending_tool_restart_resume,
               store_backend: config.capabilities.store_backend ?? "jsonl",
             },
             verification: {
@@ -218,6 +218,7 @@ export function createApp(input: {
           method,
           status: error instanceof GatewayError ? error.httpStatus : 502,
           error_type: error instanceof GatewayError ? error.code : "cursor_upstream_error",
+          error: redactSecrets(error instanceof Error ? error.message : String(error ?? "Unexpected error")),
         },
         "request failed",
       );

@@ -73,6 +73,11 @@ function createDeltaBridge() {
 }
 
 export class RunCoordinator {
+  private readonly pendingRecoveries = new Map<
+    string,
+    { digest: string; promise: Promise<{ session: Session; pump: EventPump }> }
+  >();
+
   constructor(private readonly deps: CoordinatorDeps) {}
 
   async handleMessages(
@@ -234,7 +239,17 @@ export class RunCoordinator {
     if (!lookup.session) {
       const recorded = this.deps.lineage?.findByToolIds(ids);
       if (recorded) {
-        throw sessionLost("pending tool callbacks cannot be restored after process restart");
+        await this.resumePendingLineage(
+          req,
+          res,
+          auth,
+          parsed,
+          results,
+          recorded,
+          requestId,
+          writerFactory,
+        );
+        return;
       }
     }
     const session = this.deps.registry.requireLive(lookup.session, ids);
@@ -292,6 +307,120 @@ export class RunCoordinator {
       );
     }
     await drive;
+  }
+
+  private async resumePendingLineage(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    results: ParsedToolResult[],
+    record: LineageRecord,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+  ): Promise<void> {
+    if (record.state !== "awaiting_tool_results" || !record.sdkAgentId) {
+      throw sessionLost("Stored session is not waiting for tool results");
+    }
+    if (record.credentialFingerprint !== auth.fingerprint || record.modelId !== parsed.model) {
+      throw sessionConflict("credential or model does not match the stored session");
+    }
+    if (parsed.modelParams.length > 0 && !sameModelParams(record.modelParams ?? [], parsed.modelParams)) {
+      throw sessionConflict("model parameters do not match the stored session");
+    }
+    const requestedIds = results.map((result) => result.toolUseId).sort();
+    const persistedIds = [...record.pendingToolIds].sort();
+    if (JSON.stringify(requestedIds) !== JSON.stringify(persistedIds)) {
+      throw sessionConflict("tool results must exactly match the stored pending batch");
+    }
+    if (!record.pendingCalls || record.pendingCalls.length !== record.pendingToolIds.length) {
+      throw sessionLost("Stored pending session predates restart recovery support");
+    }
+    const requestToolNames = new Set(parsed.tools.map((tool) => tool.name));
+    const missingTools = record.pendingCalls
+      .map((call) => call.name)
+      .filter((name) => !requestToolNames.has(name));
+    if (missingTools.length > 0) {
+      throw sessionConflict(`tool catalog is missing recovered tools: ${[...new Set(missingTools)].join(",")}`);
+    }
+
+    const digest = batchDigest(results);
+    const inFlight = this.pendingRecoveries.get(record.sessionId);
+    if (inFlight && inFlight.digest !== digest) {
+      throw sessionConflict("conflicting concurrent tool results for the stored session");
+    }
+    let recovery = inFlight;
+    if (!recovery) {
+      const promise = this.openPendingLineage(auth, parsed, results, record, digest);
+      recovery = { digest, promise };
+      this.pendingRecoveries.set(record.sessionId, recovery);
+      void promise.finally(() => {
+        if (this.pendingRecoveries.get(record.sessionId)?.promise === promise) {
+          this.pendingRecoveries.delete(record.sessionId);
+        }
+      }).catch(() => undefined);
+    }
+    const { session, pump } = await recovery.promise;
+    await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
+  }
+
+  private async openPendingLineage(
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    results: ParsedToolResult[],
+    record: LineageRecord,
+    digest: string,
+  ): Promise<{ session: Session; pump: EventPump }> {
+    this.deps.registry.assertCanActivateRun({ credentialFingerprint: record.credentialFingerprint });
+    const session = new Session({
+      sessionId: record.sessionId,
+      credentialFingerprint: record.credentialFingerprint,
+      modelId: record.modelId,
+      modelParams: record.modelParams,
+      instanceId: this.deps.registry.instanceId,
+      clock: this.deps.clock,
+    });
+    session.state = "resuming";
+    session.lastResultDigest = digest;
+    this.deps.registry.adopt(session);
+
+    const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
+    const deltas = createDeltaBridge();
+    try {
+      const agent = await this.deps.sdk.resumeAgent({
+        agentId: record.sdkAgentId,
+        apiKey: auth.cursorApiKey,
+        modelId: parsed.model,
+        modelParams: session.modelParams,
+        workspaceDir: this.deps.workspaceDir,
+        clientToolNames: parsed.tools.map((tool) => tool.name),
+        customTools,
+      });
+      session.agent = agent;
+      session.sdkAgentId = record.sdkAgentId;
+      const run = await agent.send({
+        text: recoveredToolResultPrompt(record, results),
+        customTools,
+        force: true,
+        onDelta: deltas.ingest,
+      });
+      session.run = run;
+      const pump = new EventPump(
+        session,
+        run,
+        this.deps.clock,
+        this.deps.config.toolBatchSettleMs,
+        this.deps.config.firstEventTimeoutMs,
+      );
+      session.pump = pump;
+      deltas.attach(pump);
+      pump.ingestEarly(session.earlyCalls.splice(0));
+      for (const id of record.pendingToolIds) this.deps.registry.indexTool(id, session.sessionId);
+      return { session, pump };
+    } catch (error) {
+      this.deps.registry.forget(session, "pending_resume_failed");
+      throw sdkFailure(error);
+    }
   }
 
   private async drive(
@@ -457,6 +586,14 @@ export class RunCoordinator {
       state: session.state as LineageRecord["state"],
       pendingToolIds:
         session.state === "awaiting_tool_results" ? [...session.pending.keys()] : [],
+      ...(session.state === "awaiting_tool_results"
+        ? {
+            pendingCalls: [...session.pending.values()].map((call) => ({
+              toolUseId: call.toolUseId,
+              name: call.name,
+            })),
+          }
+        : {}),
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
       expiresAt: session.lastActivityAt + ttl,
@@ -549,4 +686,19 @@ export class RunCoordinator {
       }
     }
   }
+}
+
+function recoveredToolResultPrompt(record: LineageRecord, results: ParsedToolResult[]): string {
+  const names = new Map((record.pendingCalls ?? []).map((call) => [call.toolUseId, call.name]));
+  const lines = results.map(
+    (result) =>
+      `TOOL_RESULT tool_use_id=${result.toolUseId} tool=${names.get(result.toolUseId) ?? "unknown"} is_error=${result.isError} content=${JSON.stringify(result.content)}`,
+  );
+  return [
+    "HOST_RECOVERY:",
+    "The host process restarted while your external tool calls were waiting for results.",
+    "Continue the same task from the persisted agent checkpoint using these exact results.",
+    "Do not repeat the completed tool calls. You may call other tools only if the task still requires them.",
+    ...lines,
+  ].join("\n");
 }

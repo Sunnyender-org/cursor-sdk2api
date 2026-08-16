@@ -64,7 +64,7 @@ export const DEFAULT_CAPABILITIES: RuntimeCapabilities = {
   parallel_tools: true,
   replay: true,
   agent_resume: true,
-  pending_tool_restart_resume: false,
+  pending_tool_restart_resume: true,
   streaming_impl: "sdk_onDelta",
   store_backend: "jsonl",
 };

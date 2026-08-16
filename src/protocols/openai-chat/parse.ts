@@ -6,6 +6,7 @@ import type {
   AnthropicTool,
 } from "../anthropic/types.js";
 import type { ParsedChatCompletions } from "./types.js";
+import { parseOpenAiToolChoice } from "../tool-choice.js";
 
 export function parseChatCompletionsRequest(body: unknown): ParsedChatCompletions {
   if (!body || typeof body !== "object") {
@@ -72,6 +73,12 @@ export function parseChatCompletionsRequest(body: unknown): ParsedChatCompletion
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const continuation = lastUser ? parseContinuation(lastUser) : undefined;
   const images = collectImages(messages);
+  const toolChoice = parseOpenAiToolChoice(
+    raw.tool_choice,
+    raw.parallel_tool_calls === false,
+    names,
+    "Chat Completions",
+  );
 
   return {
     parsed: {
@@ -84,6 +91,7 @@ export function parseChatCompletionsRequest(body: unknown): ParsedChatCompletion
       images,
       lastUser,
       continuation,
+      toolChoice,
     },
     includeUsage: readIncludeUsage(raw),
   };
@@ -113,12 +121,6 @@ function rejectUnsupported(raw: Record<string, unknown>): void {
   }
   if (raw.web_search_options !== undefined) {
     throw invalidRequest("web_search_options is not supported");
-  }
-  if (raw.parallel_tool_calls === false) {
-    throw invalidRequest("parallel_tool_calls=false is not supported");
-  }
-  if (raw.tool_choice !== undefined && raw.tool_choice !== "auto") {
-    throw invalidRequest("tool_choice must be auto or omitted");
   }
   if (raw.response_format !== undefined) {
     const format = raw.response_format;

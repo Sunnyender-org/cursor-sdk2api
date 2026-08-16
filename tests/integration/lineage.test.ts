@@ -133,7 +133,7 @@ test("lineage follow-up rejects credential and model mismatch", async () => {
   expect(app2.sdk.resumeCalls).toHaveLength(0);
 });
 
-test("pending tool result after restart is session_lost", async () => {
+test("pending tool result after restart resumes the persisted SDK agent", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-lineage-"));
   const app1 = await startTestApp({
     config: { stateDir },
@@ -157,26 +157,44 @@ test("pending tool result after restart is session_lost", async () => {
   };
   const toolId = turn.content.find((block) => block.type === "tool_use")?.id;
   const pendingRaw = readFileSync(join(stateDir, "lineage", `${turn.cursor_session_id}.json`), "utf8");
-  const pending = JSON.parse(pendingRaw) as { state: string; pendingToolIds: string[] };
+  const pending = JSON.parse(pendingRaw) as {
+    state: string;
+    pendingToolIds: string[];
+    pendingCalls: Array<{ toolUseId: string; name: string }>;
+  };
   expect(pending.state).toBe("awaiting_tool_results");
   expect(pending.pendingToolIds).toEqual([toolId]);
+  expect(pending.pendingCalls).toEqual([{ toolUseId: toolId, name: "lookup" }]);
   expect(pendingRaw).not.toContain('"q"');
   await closeTestApp(app1);
   apps.pop();
 
-  const app2 = await startTestApp({ config: { stateDir } });
+  const app2 = await startTestApp({
+    config: { stateDir },
+    sdk: { scripts: [[{ type: "text", chunks: ["recovered"] }]] },
+  });
   apps.push(app2);
-  const resumed = await api(app2, "/v1/messages", {
+  const resumeRequest = () => api(app2, "/v1/messages", {
     method: "POST",
     body: JSON.stringify({
       model: "composer-2.5",
       max_tokens: 16,
       messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "ok" }] }],
+      tools: [weatherTool()],
     }),
   });
-  expect(resumed.status).toBe(409);
-  expect(((await resumed.json()) as { error: { type: string } }).error.type).toBe("cursor_session_lost");
-  expect(app2.sdk.resumeCalls).toHaveLength(0);
+  const resumedResponses = await Promise.all([resumeRequest(), resumeRequest(), resumeRequest()]);
+  expect(resumedResponses.every((response) => response.status === 200)).toBe(true);
+  const resumedBodies = await Promise.all(
+    resumedResponses.map((response) => response.json() as Promise<{ content: Array<{ text?: string }> }>),
+  );
+  expect(
+    resumedBodies.every((body) => body.content.some((block) => block.text === "recovered")),
+  ).toBe(true);
+  expect(app2.sdk.resumeCalls).toHaveLength(1);
+  expect(app2.sdk.agents[0]?.lastSend?.force).toBe(true);
+  expect(app2.sdk.agents[0]?.lastSend?.text).toContain(`tool_use_id=${toolId}`);
+  expect(app2.sdk.agents[0]?.lastSend?.text).toContain("tool=lookup");
 });
 
 test("corrupted lineage is isolated and does not grant resume", async () => {

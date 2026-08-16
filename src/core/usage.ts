@@ -31,5 +31,8 @@ export function fromSdkUsage(usage: SdkUsage | undefined): UsageView {
   if (typeof usage.cacheReadTokens === "number") {
     view.cache_read_input_tokens = usage.cacheReadTokens;
   }
+  if (typeof usage.reasoningTokens === "number") {
+    view.reasoning_tokens = usage.reasoningTokens;
+  }
   return view;
 }

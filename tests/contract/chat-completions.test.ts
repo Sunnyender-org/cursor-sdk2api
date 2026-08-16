@@ -453,21 +453,54 @@ test("unsupported n fails closed", async () => {
   expect(ctx.sdk.lastCreate).toBeUndefined();
 });
 
-test("tool_choice required fails closed", async () => {
-  ctx = await startTestApp();
+test("required and named tool_choice are rendered as harness directives", async () => {
+  ctx = await startTestApp({
+    sdk: { scripts: [[{ type: "text", chunks: ["ok"] }]] },
+  });
   const res = await api(ctx, "/v1/chat/completions", {
     method: "POST",
     body: JSON.stringify({
       model: "composer-2.5",
       tool_choice: "required",
+      tools,
       messages: [{ role: "user", content: "hi" }],
     }),
   });
-  const error = chatError(await res.json());
-  expect(res.status).toBe(422);
-  expect(error.code).toBe("invalid_request");
-  expect(error.message).toMatch(/tool_choice/);
-  expect(ctx.sdk.lastCreate).toBeUndefined();
+  expect(res.status).toBe(200);
+  expect(ctx.sdk.agents[0]?.lastSend?.text).toContain("must call at least one available custom MCP tool");
+
+  ctx.sdk.agents.length = 0;
+  const named = await api(ctx, "/v1/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      tool_choice: { type: "function", function: { name: "lookup" } },
+      tools,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  });
+  expect(named.status).toBe(200);
+  expect(ctx.sdk.agents.at(-1)?.lastSend?.text).toContain("must call the custom MCP tool lookup");
+});
+
+test("failed chat request logs the concrete invalid_request reason", async () => {
+  ctx = await startTestApp({ captureLogs: true });
+  const res = await api(ctx, "/v1/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      tool_choice: "none",
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  });
+  expect(res.status).toBe(400);
+  const failed = ctx.logs.filter((line) => line.includes("request failed"));
+  expect(failed.length).toBeGreaterThan(0);
+  const entry = JSON.parse(failed[failed.length - 1] ?? "{}") as {
+    fields?: { error?: string; error_type?: string };
+  };
+  expect(entry.fields?.error_type).toBe("invalid_request");
+  expect(entry.fields?.error).toBe("Chat Completions tool_choice=none is not supported");
 });
 
 test("in-stream SDK errors use an OpenAI data frame before DONE", async () => {

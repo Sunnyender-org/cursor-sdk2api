@@ -160,7 +160,7 @@ function wrapSdkAgent(agent: SDKAgent, fallbackTools: Record<string, SdkCustomTo
         run = await agent.send(
           sendInput.images?.length ? { text: sendInput.text, images: sendInput.images } : sendInput.text,
           {
-          local: { customTools: customTools as never },
+          local: { customTools: customTools as never, force: sendInput.force === true },
           onDelta: hasDeltaSink
             ? async ({ update }: { update: { type?: string; text?: string; usage?: unknown } }) => {
                 if (update.type === "text-delta" || update.type === "thinking-delta") {

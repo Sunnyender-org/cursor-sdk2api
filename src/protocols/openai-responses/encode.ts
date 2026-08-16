@@ -6,7 +6,8 @@ export interface ResponsesUsage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
-  input_tokens_details?: { cached_tokens: number };
+  input_tokens_details: { cached_tokens: number };
+  output_tokens_details: { reasoning_tokens: number };
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
   usage_deferred?: boolean;
@@ -14,14 +15,17 @@ export interface ResponsesUsage {
 }
 
 export function encodeResponsesUsage(turn: AssistantTurn): ResponsesUsage {
+  const cached =
+    typeof turn.usage.cache_read_input_tokens === "number" ? turn.usage.cache_read_input_tokens : 0;
   const usage: ResponsesUsage = {
     input_tokens: turn.usage.input_tokens,
     output_tokens: turn.usage.output_tokens,
     total_tokens: turn.usage.input_tokens + turn.usage.output_tokens,
+    input_tokens_details: { cached_tokens: cached },
+    output_tokens_details: { reasoning_tokens: turn.usage.reasoning_tokens ?? 0 },
   };
   if (typeof turn.usage.cache_read_input_tokens === "number") {
     usage.cache_read_input_tokens = turn.usage.cache_read_input_tokens;
-    usage.input_tokens_details = { cached_tokens: turn.usage.cache_read_input_tokens };
   }
   if (typeof turn.usage.cache_creation_input_tokens === "number") {
     usage.cache_creation_input_tokens = turn.usage.cache_creation_input_tokens;

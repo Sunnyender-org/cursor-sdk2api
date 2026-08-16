@@ -130,7 +130,7 @@ test("disconnect after a tool batch keeps the session for later replay", async (
   expect(final.content.some((block) => block.text === "recovered")).toBe(true);
 });
 
-test("process-generation loss is explicit session_lost, not a fake success", async () => {
+test("restart recovery without the original tool catalog fails closed", async () => {
   ctx = await startTestApp({
     sdk: { scripts: [[{ type: "tools", calls: [{ name: "lookup", input: { q: "x" } }] }]] },
   });
@@ -157,7 +157,7 @@ test("process-generation loss is explicit session_lost, not a fake success", asy
   });
   const body = (await res.json()) as { error: { type: string } };
   expect(res.status).toBe(409);
-  expect(body.error.type).toBe("cursor_session_lost");
+  expect(body.error.type).toBe("cursor_session_conflict");
   expect(JSON.stringify(body)).not.toContain("end_turn");
 });
 

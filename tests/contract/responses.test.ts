@@ -74,6 +74,8 @@ test("non-stream text returns a response object", async () => {
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    input_tokens_details: { cached_tokens: 0 },
+    output_tokens_details: { reasoning_tokens: 0 },
     usage_status: "unavailable",
   });
   expect(body.cursor_session_id).toMatch(/^ses_/);
@@ -173,7 +175,13 @@ test("single function_call continuation stays on the same SDK run", async () => 
           { type: "text", chunks: ["sunny"] },
         ],
       ],
-      finalUsage: { inputTokens: 11, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 4 },
+      finalUsage: {
+        inputTokens: 11,
+        outputTokens: 5,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 4,
+        reasoningTokens: 3,
+      },
     },
   });
   const first = await api(ctx, "/v1/responses", {
@@ -244,6 +252,7 @@ test("single function_call continuation stays on the same SDK run", async () => 
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
       input_tokens_details?: { cached_tokens: number };
+      output_tokens_details?: { reasoning_tokens: number };
       usage_status?: string;
     };
   };
@@ -259,6 +268,7 @@ test("single function_call continuation stays on the same SDK run", async () => 
     cache_creation_input_tokens: 4,
     cache_read_input_tokens: 2,
     input_tokens_details: { cached_tokens: 2 },
+    output_tokens_details: { reasoning_tokens: 3 },
     usage_status: "sdk",
   });
   expect(ctx.sdk.agents.length).toBe(1);
@@ -580,6 +590,35 @@ test("remote input_image fails closed instead of dropping the image", async () =
   expect(ctx.sdk.lastCreate).toBeUndefined();
 });
 
+test("known optional include is accepted without expansion and unknown includes fail closed", async () => {
+  ctx = await startTestApp({
+    sdk: { scripts: [[{ type: "text", chunks: ["ok"] }]] },
+  });
+  const res = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      input: "hi",
+      include: ["reasoning.encrypted_content"],
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { output?: unknown };
+  expect(body.output).toBeDefined();
+  expect(ctx.sdk.lastCreate).toBeDefined();
+
+  const unsupported = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      input: "hi",
+      include: ["file_search_call.results"],
+    }),
+  });
+  expect(unsupported.status).toBe(400);
+  expect(openaiError(await unsupported.json()).message).toMatch(/unsupported include/);
+});
+
 test("previous_response_id and hosted tools fail closed", async () => {
   ctx = await startTestApp();
   const previous = await api(ctx, "/v1/responses", {
@@ -610,25 +649,41 @@ test("previous_response_id and hosted tools fail closed", async () => {
   expect(ctx.sdk.lastCreate).toBeUndefined();
 });
 
-test("Responses tool_choice other than auto fails closed", async () => {
-  ctx = await startTestApp();
+test("Responses required and named function tool_choice render harness directives", async () => {
+  ctx = await startTestApp({ sdk: { scripts: [[{ type: "text", chunks: ["ok"] }]] } });
   const res = await api(ctx, "/v1/responses", {
     method: "POST",
     body: JSON.stringify({
       model: "composer-2.5",
       input: "hi",
       tool_choice: "required",
+      tools,
     }),
   });
-  expect(res.status).toBe(422);
-  expect(openaiError(await res.json()).message).toMatch(/tool_choice/);
-  expect(ctx.sdk.lastCreate).toBeUndefined();
+  expect(res.status).toBe(200);
+  expect(ctx.sdk.agents[0]?.lastSend?.text).toContain("must call at least one available custom MCP tool");
+  expect(ctx.sdk.agents[0]?.lastSend?.text).toContain("Never use the SDK runtime cwd in tool arguments");
+
+  const named = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      input: "title this",
+      tool_choice: { type: "function", name: "lookup" },
+      tools,
+    }),
+  });
+  expect(named.status).toBe(200);
+  expect(ctx.sdk.agents.at(-1)?.lastSend?.text).toContain("must call the custom MCP tool lookup");
 });
 
-test("store=true and mixed function_call_output fail closed", async () => {
+test("store=true fails closed while earlier function outputs may remain in full history", async () => {
   ctx = await startTestApp({
     sdk: {
-      scripts: [[{ type: "tools", calls: [{ name: "lookup", input: { q: "1" } }] }, { type: "text", chunks: ["final"] }]],
+      agentScripts: [
+        [[{ type: "tools", calls: [{ name: "lookup", input: { q: "1" } }] }, { type: "text", chunks: ["final"] }]],
+        [[{ type: "text", chunks: ["new turn"] }]],
+      ],
     },
   });
   const stored = await api(ctx, "/v1/responses", {
@@ -650,7 +705,7 @@ test("store=true and mixed function_call_output fail closed", async () => {
     }),
   });
   const call = outputOfType((await first.json()) as { output: unknown[] }, "function_call")[0];
-  const mixed = await api(ctx, "/v1/responses", {
+  const history = await api(ctx, "/v1/responses", {
     method: "POST",
     body: JSON.stringify({
       model: "composer-2.5",
@@ -660,8 +715,47 @@ test("store=true and mixed function_call_output fail closed", async () => {
       ],
     }),
   });
-  expect(mixed.status).toBe(422);
-  expect(openaiError(await mixed.json()).message).toMatch(/mixed/i);
+  expect(history.status).toBe(200);
+  expect(outputOfType((await history.json()) as { output: unknown[] }, "message")[0]).toMatchObject({
+    content: [{ text: "new turn" }],
+  });
+});
+
+test("full Responses history resumes from only the latest trailing function outputs", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      scripts: [[
+        { type: "tools", calls: [{ name: "lookup", input: { q: "latest" }, id: "call_latest" }] },
+        { type: "text", chunks: ["continued"] },
+      ]],
+    },
+  });
+  const first = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({ model: "composer-2.5", input: "go", tools: [responsesWeatherTool()] }),
+  });
+  expect(first.status).toBe(200);
+
+  const resumed = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      tools: [responsesWeatherTool()],
+      input: [
+        { type: "message", role: "user", content: "old request" },
+        { type: "function_call", call_id: "call_old", name: "lookup", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_old", output: "old result" },
+        { type: "message", role: "assistant", content: "old answer" },
+        { type: "message", role: "user", content: "latest request" },
+        { type: "function_call", call_id: "call_latest", name: "lookup", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_latest", output: "latest result" },
+      ],
+    }),
+  });
+  expect(resumed.status).toBe(200);
+  expect(outputOfType((await resumed.json()) as { output: unknown[] }, "message")[0]).toMatchObject({
+    content: [{ text: "continued" }],
+  });
 });
 
 test("unknown and missing function_call_output ids fail closed", async () => {

@@ -7,6 +7,7 @@ import type {
   ParsedMessages,
   ParsedToolResult,
 } from "./types.js";
+import { parseAnthropicToolChoice, toolChoiceDirective } from "../tool-choice.js";
 
 export function parseMessagesRequest(body: unknown): ParsedMessages {
   if (!body || typeof body !== "object") {
@@ -31,6 +32,13 @@ export function parseMessagesRequest(body: unknown): ParsedMessages {
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const continuation = lastUser ? parseContinuation(lastUser) : undefined;
   const images = collectImages(messages);
+  const toolChoice = parseAnthropicToolChoice(
+    raw.tool_choice,
+    raw.tool_choice && typeof raw.tool_choice === "object"
+      ? (raw.tool_choice as { disable_parallel_tool_use?: unknown }).disable_parallel_tool_use === true
+      : false,
+    names,
+  );
 
   return {
     model: raw.model.trim(),
@@ -42,6 +50,7 @@ export function parseMessagesRequest(body: unknown): ParsedMessages {
     images,
     lastUser,
     continuation,
+    toolChoice,
   };
 }
 
@@ -232,6 +241,16 @@ export function stringifyToolResult(content: unknown): string {
 
 export function renderPrompt(parsed: ParsedMessages): { text: string; images: Array<{ data: string; mimeType: string }> } {
   const parts: string[] = [];
+  if (parsed.tools.length > 0) {
+    parts.push(
+      [
+        "HARNESS TOOL CONTEXT:",
+        "The custom MCP tools execute in the API caller's environment, not in the Cursor SDK runtime workspace.",
+        "Never use the SDK runtime cwd in tool arguments. Treat workspace metadata supplied by the client as authoritative.",
+        "Prefer relative paths when the tool schema allows them. If a tool requires an absolute path, resolve it against the client's workspace path.",
+      ].join("\n"),
+    );
+  }
   if (parsed.systemText) parts.push(`System:\n${parsed.systemText}`);
   const messages = parsed.continuation ? parsed.messages.slice(0, -1) : parsed.messages;
   for (const message of messages) {
@@ -252,6 +271,8 @@ export function renderPrompt(parsed: ParsedMessages): { text: string; images: Ar
       .join("\n");
     if (text) parts.push(`${message.role}:\n${text}`);
   }
+  const directive = toolChoiceDirective(parsed.toolChoice, parsed.tools.length > 0);
+  if (directive) parts.push(directive);
   return { text: parts.join("\n\n") || " ", images: parsed.images };
 }
 

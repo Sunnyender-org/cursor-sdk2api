@@ -6,6 +6,7 @@ import type {
   AnthropicTool,
 } from "../anthropic/types.js";
 import type { ParsedResponses } from "./types.js";
+import { parseOpenAiToolChoice } from "../tool-choice.js";
 
 export function parseResponsesRequest(body: unknown): ParsedResponses {
   if (!body || typeof body !== "object") {
@@ -48,6 +49,12 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const continuation = lastUser ? parseContinuation(lastUser) : undefined;
   const images = collectImages(messages);
+  const toolChoice = parseOpenAiToolChoice(
+    raw.tool_choice,
+    raw.parallel_tool_calls === false,
+    names,
+    "Responses",
+  );
 
   return {
     parsed: {
@@ -60,6 +67,7 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
       images,
       lastUser,
       continuation,
+      toolChoice,
     },
   };
 }
@@ -80,13 +88,16 @@ function rejectUnsupported(raw: Record<string, unknown>): void {
     throw invalidRequest("conversation is not supported");
   }
   if (raw.include !== undefined && raw.include !== null) {
-    throw invalidRequest("include expansions are not supported");
-  }
-  if (raw.parallel_tool_calls === false) {
-    throw invalidRequest("parallel_tool_calls=false is not supported");
-  }
-  if (raw.tool_choice !== undefined && raw.tool_choice !== "auto") {
-    throw invalidRequest("tool_choice must be auto or omitted");
+    if (!Array.isArray(raw.include)) {
+      throw invalidRequest("include must be an array if provided");
+    }
+    for (const item of raw.include) {
+      if (item !== "reasoning.encrypted_content") {
+        throw invalidRequest(`unsupported include expansion: ${String(item)}`);
+      }
+    }
+    // Grok requests encrypted reasoning for compatibility. Cursor SDK does not
+    // expose that opaque blob, so this known optional expansion is accepted but omitted.
   }
   if (raw.text !== undefined) {
     const text = raw.text;
@@ -160,8 +171,6 @@ function parseInput(input: unknown): { messages: AnthropicMessage[]; systemParts
   if (!Array.isArray(input) || input.length === 0) {
     throw invalidRequest("input must be a non-empty string or item array");
   }
-  assertFunctionOutputsAreSuffix(input);
-
   const messages: AnthropicMessage[] = [];
   const systemParts: string[] = [];
   let pendingResults: Extract<AnthropicContentBlock, { type: "tool_result" }>[] = [];
@@ -249,28 +258,6 @@ function inferItemType(raw: Record<string, unknown>): string {
   if (raw.call_id !== undefined && raw.output !== undefined) return "function_call_output";
   if (raw.call_id !== undefined && raw.name !== undefined) return "function_call";
   throw invalidRequest("input item must include type");
-}
-
-function isFunctionCallOutput(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const raw = value as Record<string, unknown>;
-  if (raw.type === "function_call_output") return true;
-  return raw.type === undefined && raw.call_id !== undefined && raw.output !== undefined;
-}
-
-function assertFunctionOutputsAreSuffix(items: unknown[]): void {
-  let seenOutput = false;
-  for (const item of items) {
-    if (isFunctionCallOutput(item)) {
-      seenOutput = true;
-      continue;
-    }
-    if (seenOutput) {
-      throw invalidRequest(
-        "mixed new text and function_call_output in the latest input is not allowed; function_call_output must be the trailing items",
-      );
-    }
-  }
 }
 
 function parseFunctionCallOutput(
