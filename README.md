@@ -51,7 +51,7 @@ Point each client at the protocol it already speaks. Mixing them on one channel 
 | **Grok Build** | custom model `api_backend = "responses"` → `POST /v1/responses` | Messages. If the client later sends `previous_response_id`, this gateway returns 422; switch that model to `chat_completions`. |
 | **Codex / OpenAI Responses** | `base_url` `…/v1`, `wire_api = "responses"` → `POST /v1/responses` | Assume OpenAI store semantics. `previous_response_id`, `store=true`, conversation objects, and hosted tools fail closed. |
 | **OpenAI SDK / generic Chat** | `base_url` `…/v1` → `POST /v1/chat/completions` | Messages unless the client is Anthropic-shaped. |
-| **new-api / one-api** | Anthropic upstream = origin (Messages); OpenAI upstream = `origin/v1` (Chat) | Mix both on one channel. There is no official new-api channel PR yet; configure a generic sidecar. |
+| **new-api / one-api** | Two generic channels, both pointed at the gateway origin: Anthropic for Messages; OpenAI for Chat / Responses | Do not embed the SDK in new-api or mix both protocols on one channel. Upstream PR #6869 was closed; use the external sidecar. |
 
 Claude Code, Grok Build, and Codex edit **your local project** with **their** tools. The gateway only runs the model. Cursor SDK `cwd` is an empty per-credential directory, so the model may emit that absolute path. Prefer relative paths, or your real project path.
 
@@ -125,6 +125,24 @@ docker run --rm -p 8080:8080 -e AUTH_MODE=byok cursor-sdk2api:local
 ```
 
 `docker-compose.yml` is a single-service wrapper. It defaults `STATE_DIR` to `/data` on a named volume and does not ship secrets.
+
+For a zero-patch new-api deployment, start the gateway and new-api on one
+network, then configure new-api's existing Anthropic and OpenAI channels:
+
+```bash
+cd integrations/new-api
+cp .env.example .env
+docker compose up -d --build
+```
+
+See [`docs/NEW_API_INTEGRATION.md`](docs/NEW_API_INTEGRATION.md) for immutable
+image pins, channel templates, BYOK/managed key placement, the clean compose
+E2E, and the text/Sonnet/Grok acceptance script.
+
+Future approved version tags run a multi-architecture GHCR workflow with
+provenance, SBOM attestations, security scans, generated release notes, and an
+immutable digest receipt. The existing v0.1.0 source Release has no GHCR asset;
+do not infer an image publication from the tag or source CI.
 
 Copy [`.env.example`](.env.example) for the full configuration surface. Never commit real keys.
 

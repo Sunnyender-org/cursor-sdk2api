@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic canaries that verify credential redaction"
+regexes = [
+  '''^sk-canary-SECRET-123456789$''',
+  '''^sk-live-canary-ABCDEFGH$''',
+  '''^sk-receipt-canary-XYZ12345$''',
+]

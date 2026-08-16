@@ -1,0 +1,48 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Secret scan
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo:ro"
+          -w /repo
+          ghcr.io/gitleaks/gitleaks:v8.28.0
+          dir . --config .gitleaks.toml --redact --no-banner
+      - uses: docker/setup-buildx-action@v4
+      - name: Build scan image
+        run: docker build --load -t cursor-sdk2api:security .
+      - name: Vulnerability scan
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy:0.66.0 image
+          --exit-code 1 --ignore-unfixed --severity CRITICAL
+          cursor-sdk2api:security
+      - name: Generate SPDX SBOM
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$PWD:/out"
+          anchore/syft:v1.32.0
+          cursor-sdk2api:security -o spdx-json=/out/cursor-sdk2api.spdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cursor-sdk2api-sbom
+          path: cursor-sdk2api.spdx.json

@@ -100,7 +100,7 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     managedCursorKey: process.env.CURSOR_API_KEY || undefined,
     gatewayAccessKey: process.env.GATEWAY_ACCESS_KEY || undefined,
     instanceId: instanceId(process.env.INSTANCE_ID),
-    version: "0.1.0",
+    version: process.env.GATEWAY_VERSION?.trim() || "0.1.0",
     sdkVersion: "1.0.28",
     globalActiveRuns: envInt("GLOBAL_ACTIVE_RUNS", 4),
     perCredentialActiveRuns: envInt("PER_CREDENTIAL_ACTIVE_RUNS", 2),

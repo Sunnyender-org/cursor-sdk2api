@@ -1,0 +1,59 @@
+services:
+  gateway:
+    image: ${CURSOR_SDK2API_IMAGE:-cursor-sdk2api:new-api-local}
+    build:
+      context: ../..
+      args:
+        VERSION: compose-local
+        REVISION: local
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      AUTH_MODE: ${CURSOR_AUTH_MODE:-byok}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+      GATEWAY_ACCESS_KEY: ${GATEWAY_ACCESS_KEY:-}
+      HOST: 0.0.0.0
+      PORT: 8080
+      STATE_DIR: /data
+    volumes:
+      - gateway-data:/data
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  new-api:
+    image: ${NEW_API_IMAGE:-calciumion/new-api@sha256:be4b1f3fb48687cab0e0ff921a1e4c69ae3738c0907ce05646ddc6da02cb35a5}
+    pull_policy: missing
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${NEW_API_PORT:-3000}:3000"
+    environment:
+      TZ: Asia/Shanghai
+      SQLITE_PATH: ${NEW_API_SQLITE_PATH:-/data/new-api.db}
+      SESSION_SECRET: ${NEW_API_SESSION_SECRET:-replace-before-public-use}
+    volumes:
+      - new-api-data:/data
+
+  network-probe:
+    image: curlimages/curl@sha256:4026b29997dc7c823b51c164b71e2b51e0fd95cce4601f78202c513d97da2922
+    profiles: [verify]
+    depends_on:
+      gateway:
+        condition: service_healthy
+      new-api:
+        condition: service_started
+    command:
+      - sh
+      - -ec
+      - |
+        curl --fail --silent --show-error http://gateway:8080/health >/dev/null
+        until curl --fail --silent --show-error http://new-api:3000/api/status >/dev/null; do sleep 2; done
+
+volumes:
+  gateway-data:
+  new-api-data:

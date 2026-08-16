@@ -51,7 +51,7 @@
 | **Grok Build** | 自定义模型 `api_backend = "responses"` → `POST /v1/responses` | Messages。若客户端后来带上 `previous_response_id`，本网关会 422；把该模型改成 `chat_completions`。 |
 | **Codex / OpenAI Responses** | `base_url` 指到 `…/v1`，`wire_api = "responses"` → `POST /v1/responses` | 不要假定 OpenAI store 语义。`previous_response_id`、`store=true`、conversation 和托管工具会 fail closed。 |
 | **OpenAI SDK / 通用 Chat** | `base_url` 指到 `…/v1` → `POST /v1/chat/completions` | 除非客户端是 Anthropic 形态，否则不要走 Messages。 |
-| **new-api / one-api** | Anthropic 上游 = origin（Messages）；OpenAI 上游 = `origin/v1`（Chat） | 同一通道混用两种协议。目前没有官方 new-api 渠道 PR，按通用 sidecar 配置。 |
+| **new-api / one-api** | 建两个通用渠道，都指向 gateway origin：Anthropic 走 Messages；OpenAI 走 Chat / Responses | 不要把 SDK 嵌进 new-api，也不要在一个渠道里混两种协议。上游 PR #6869 已关闭，使用外置 sidecar。 |
 
 Claude Code、Grok Build、Codex 改的是**你本机项目**，用的是**它们自己的工具**。网关只跑模型。Cursor SDK 的 `cwd` 是按凭证隔离的空目录，所以模型有时会吐出那个绝对路径。优先写相对路径，或写你的真实项目路径。
 
@@ -125,6 +125,23 @@ docker run --rm -p 8080:8080 -e AUTH_MODE=byok cursor-sdk2api:local
 ```
 
 `docker-compose.yml` 是单服务包装。它把 `STATE_DIR` 默认设为命名卷上的 `/data`，并且不携带密钥。
+
+new-api 可直接使用零补丁双服务示例：先让 gateway 与 new-api 进入同一网络，
+再配置 new-api 已有的 Anthropic 与 OpenAI 渠道：
+
+```bash
+cd integrations/new-api
+cp .env.example .env
+docker compose up -d --build
+```
+
+不可变镜像 pin、渠道模板、BYOK/managed 密钥边界、干净 compose E2E，
+以及 text / Sonnet / Grok 验收脚本见
+[`docs/NEW_API_INTEGRATION.md`](docs/NEW_API_INTEGRATION.md)。
+
+未来经批准的版本 tag 会构建 amd64/arm64 GHCR 镜像，并生成 provenance、
+SBOM、安全扫描、Release notes 与不可变 digest 回执。现有 v0.1.0 源码
+Release 没有 GHCR 资产，不能从 tag 或源码 CI 推断镜像已经发布。
 
 完整配置面见 [`.env.example`](.env.example)。不要提交真实密钥。
 

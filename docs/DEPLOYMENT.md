@@ -28,6 +28,35 @@ docker run --rm -p 8080:8080 -e AUTH_MODE=byok cursor-sdk2api:local
 
 `docker-compose.yml` is a single-service wrapper. It does not mount files from other projects and does not ship secrets.
 
+## GHCR releases
+
+An approved `v<package-version>` tag runs the release workflow. It re-runs the
+deterministic gate, secret scan, and critical-image vulnerability scan, then
+publishes `linux/amd64` and `linux/arm64` images with OCI provenance and SBOM
+attestations. The generated GitHub Release includes `image-digest.txt` so an
+operator can deploy an immutable reference:
+
+The runtime stage is a pinned non-root distroless Node 22 / Debian 13 image. It contains no
+shell, package manager, or npm CLI; production dependencies are pruned in the
+build stage and copied into the runtime image.
+
+```bash
+docker pull ghcr.io/sunnyender-org/cursor-sdk2api@sha256:<digest>
+docker run --rm -p 8080:8080 \
+  ghcr.io/sunnyender-org/cursor-sdk2api@sha256:<digest>
+```
+
+Source changes and a green workflow do not mean an image exists. Creating the
+tag and GitHub Release remains a separate maintainer action.
+
+The existing `v0.1.0` source Release predates this GHCR workflow and has no
+container asset. Before a later approved release, bump `package.json`, create
+the matching new tag, verify the GHCR package is public, and prove an
+unauthenticated pull by digest.
+
+For a two-service new-api example, see
+[`NEW_API_INTEGRATION.md`](NEW_API_INTEGRATION.md).
+
 ## Outbound proxy
 
 The official SDK does not automatically inherit the host proxy. When
