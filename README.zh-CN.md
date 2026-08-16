@@ -4,7 +4,7 @@
 
 独立 MIT 网关：把官方 Cursor TypeScript SDK（`@cursor/sdk`）暴露成 Anthropic 与 OpenAI 兼容 HTTP API。
 
-这不是 Cursor / Anysphere 官方产品。它不逆向私有 Cursor 传输、Cookie、Desktop/CLI 凭据库或 IDE 会话。唯一的 Cursor 执行引擎是公开发布的 `@cursor/sdk`。使用者必须提供合法获得的 Cursor API Key，并遵守 Cursor 服务条款。
+这不是 Cursor / Anysphere 官方产品。模型执行不逆向私有 Cursor 传输、Cookie、Desktop/CLI 凭据库或 IDE 会话；唯一执行引擎仍是公开发布的 `@cursor/sdk`。账号用量会按下文说明，用同一把 User API Key 查询 Cursor Dashboard 控制面。使用者必须提供合法获得的 Cursor API Key，并遵守 Cursor 服务条款。
 
 **v0.1 以 Anthropic Messages 为先。** `/v1/chat/completions` 和 `/v1/responses` 都是同一套 Run 引擎上的协议适配层（已有 contract 测试，不是真实模型验收声明）。
 
@@ -15,7 +15,8 @@
 | `GET` | `/console/` | 页面加载无需 | 可选 BF Labs 运维控制台。页面发起 API 请求仍需 key，且只保存在当前标签页的 React 内存中。 |
 | `GET` | `/health` | 无 | 构建版本、SDK 版本、就绪状态、**已实现**能力位、网络传输模式，以及独立的 `verification` 对象。能力位为 `true` 只表示网关实现了该路径，不是真实模型验收声明。`/health` 不含账号数据、密钥或代理 URL。 |
 | `GET` | `/v1/models` | 需要 | 实时 `Cursor.models.list()` 目录，保留精确公开模型 ID。不可用时返回空列表并给出明确 reason。 |
-| `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`。花费和额度字段仅在官方接口真正返回时出现。 |
+| `GET` | `/v1/account` | 需要 | 身份来自 `Cursor.me()`；同一把 User API Key 直接查询 Cursor Dashboard 当前计费周期用量。无需 Cookie、Team Admin Key 或 OAuth Token。 |
+| `POST` | `/v1/messages/count_tokens` | 需要 | 为 Claude Code 上下文管理提供保守的本地估算，并返回 `x-cursor-sdk2api-token-count: estimated`；不用于计费。 |
 | `POST` | `/v1/messages` | 需要 | Anthropic Messages 文本、SSE、客户端工具、同轮并行工具、多轮 continuation，以及进程内 replay。 |
 | `POST` | `/v1/chat/completions` | 需要 | OpenAI Chat Completions 适配：文本、`data:` SSE + `[DONE]`、function tools、continuation、`reasoning_content`、base64 `image_url`。与 Messages 共用同一套 session/run 引擎。 |
 | `POST` | `/v1/responses` | 需要 | OpenAI Responses 适配：`input` 字符串或 item、Responses SSE + `response.completed`、reasoning、base64 `input_image`、`type=function` 工具、按 `call_id` 续轮 `function_call_output`。与 Messages 共用同一套 session/run 引擎。`previous_response_id` / 托管工具 / `store=true` 会 fail closed。控制台 playground 可直接使用 Responses。 |
@@ -67,7 +68,7 @@ docker run --rm -p 8080:8080 -e AUTH_MODE=byok cursor-sdk2api:local
 官方 SDK 不会自动继承宿主机代理。设置受支持的代理变量后，网关会同时接管 **两条** SDK 数据通路：
 
 - 本地 Agent 切换到 HTTP/1.1，并通过 `proxy-agent` 出站
-- 模型目录和账号查询走 Undici 的环境代理 dispatcher
+- 模型目录、账号与 Cursor Dashboard 用量查询走 Undici 的环境代理 dispatcher
 
 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY` 的大小写形式均接受。代理 URL 必须是 `http://` 或 `https://`。SOCKS / PAC 会 fail closed，因为两条 SDK 通路无法一致支持它们。未配置代理时，Agent 保留官方 HTTP/2 传输。
 
@@ -133,7 +134,7 @@ curl -s localhost:8080/v1/responses \
   -d '{"model":"composer-2.5","input":"hello"}'
 ```
 
-流式事件使用 Responses 事件名（`response.created` … `response.completed`）。出错时发 Responses `error` 事件，不会发假的 `response.completed`。托管工具、`store=true`、background、conversation 和 include 展开会 fail closed。
+流式事件使用 Responses 事件名（`response.created` … `response.completed`）。出错时发 Responses `error` 事件，不会发假的 `response.completed`。托管工具、`store=true`、background、conversation 和未知 include expansion 会 fail closed。Grok 可选的 `reasoning.encrypted_content` include 会接受但省略。
 
 `function_call_output.output` 接受字符串或文本 content part 数组。图片/文件型工具结果在能够无损映射到 SDK 前会以 `422` fail closed，不会静默转成 JSON 文本。
 
@@ -171,7 +172,7 @@ curl -s localhost:8080/v1/responses \
 }
 ```
 
-对于 `/v1/messages`，`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。`temperature`、`top_p`、`stop_sequences` 和 `tool_choice` 会被接受，但 **不会映射** 到 `@cursor/sdk`。对于 `/v1/chat/completions` 和 `/v1/responses`，`tool_choice` 只能是 `auto` 或省略；其他值会以 `422` fail closed。
+对于 `/v1/messages`，`max_tokens` 会被接受，以便 Claude Code 形态的请求能解析。SDK Harness 没有精确的 max-token 强制执行，网关也不会模拟一层。工具选择会映射成 Harness 指令：Messages 支持 `auto` / `any` / 指定 `tool`；Chat 与 Responses 支持 `auto` / `required` / 指定 `function`。串行工具标志会生效；`tool_choice=none` 仍然 fail closed。
 
 错误体：
 
@@ -212,17 +213,17 @@ pending callback 是普通内存 Promise，不能跨进程序列化。
 MVP 只在创建该 live run 的进程里持有它。
 
 - 蓝绿和多实例部署需要排空连接，并对 session 做粘性归属。
-- 进程重启后，未完成的工具续轮返回 `409 cursor_session_lost`。
+- 进程重启后，如果 credential、model、模型参数、完整 tool-id 批次和工具目录都匹配 owner-only lineage，未完成的工具续轮可以恢复。
 - 网关不会新建 Agent 来假装原来的 pending Run 已经恢复。
 
-带 `x-cursor-session-id` 的 completed follow-up，在 `SESSION_TTL_MS` 内且 credential / model / 显式模型参数匹配时，可以通过 `Agent.resume` 续聊。`pending_tool_restart_resume` 保持 `false`，直到 kill/restart 验收证明能精确恢复 callback。
+带 `x-cursor-session-id` 的 completed follow-up，在 `SESSION_TTL_MS` 内且 credential / model / 显式模型参数匹配时，可以通过 `Agent.resume` 续聊。Pending 工具恢复复用同一个 SDK store，并使用 `local.force=true`；真实 kill/restart 验收通过后，health 报告 `pending_tool_restart_resume=true`。
 
 `STATE_DIR` 存放：
 
 - 官方 JSONL SDK store：`$STATE_DIR/sdk-store/<credential-fingerprint>`
 - 仅属主可读写的 lineage 元数据：`$STATE_DIR/lineage`（`0700` / `0600`）
 
-本机 / 开发默认是 `$TMPDIR/cursor-sdk2api/state`。镜像和 compose 默认是 `/data`。lineage 只存 resume 元数据（session id、SDK agent id、fingerprint、model、显式参数、state、pending tool id、可选 result digest、时间戳）。它不存 API Key、prompt 或工具载荷。assistant replay 正文不会落盘，因此重启后的 duplicate-same 也是 `cursor_session_lost`。
+本机 / 开发默认是 `$TMPDIR/cursor-sdk2api/state`。镜像和 compose 默认是 `/data`。lineage 只存 resume 元数据（session id、SDK agent id、fingerprint、model、显式参数、state、pending tool id/name、可选 result digest、时间戳）。它不存 API Key、prompt、工具输入或工具结果。assistant replay 正文不会落盘。
 
 BYOK 凭据共享进程容量上限，但官方 SDK store 和空 workspace 按 credential fingerprint 分区。这是进程内租户隔离，不是“可抵御恶意多租户托管”的声明。
 
@@ -230,7 +231,7 @@ BYOK 凭据共享进程容量上限，但官方 SDK store 和空 workspace 按 c
 
 ## 现状与证据
 
-v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及 pending 重启 fail closed。Chat Completions 和 Responses 是这套引擎上的协议适配，已有 contract 测试，不是真实模型验收声明。运维控制台 playground 可以在同一个提示词界面直接测试 Messages、Chat Completions 和 Responses。
+v0.1 已实现 Messages 文本/SSE、客户端 customTools/MCP、同轮并行工具、多轮 continuation、进程内 replay、租户/模型隔离、completed Agent resume，以及精确的 pending 工具重启恢复。Chat Completions 和 Responses 与 Messages 共用同一个 coordinator。运维控制台 playground 可以测试三种协议。
 
 脱敏、不含秘密的验收摘要见 [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md)。这份 receipt 是有日期的本地样本，不能保证每个凭据、地区或镜像都一样：
 
@@ -246,8 +247,9 @@ thinking 和 image 块已实现并有 contract 测试。真实模型上的 think
 
 - 运行时必须使用官方 `@cursor/sdk`。其自身许可证和 Cursor Terms 仍然适用。见 [NOTICE.md](NOTICE.md)。
 - 生产依赖 `npm audit --omit=dev`（2026-08-15）在 SDK 树中报告 3 个传递性发现：`undici`（high），以及 `@connectrpc/connect-node` / `@cursor/sdk`（moderate）。`fixAvailable` 为 false。不要执行破坏性的 `npm audit fix`。
-- `Cursor.me()` 目前不暴露花费或剩余额度；因此 `/v1/account` 在官方接口补齐这些字段前是 `partial`。
-- 进行中工具轮的硬崩溃恢复是 `cursor_session_lost`，不是高可用。
+- Cursor Dashboard 用量链路会先用 User API Key 换取短期 dashboard access token，再调用 `GetCurrentPeriodUsage` 与 `GetPlanInfo`。该控制面不可用时，身份仍会返回，`/v1/account` 以明确 reason 降级为 `partial`。
+- `@cursor/sdk` 没有 tokenizer preflight API，因此 `count_tokens` 是本地估算；最终 SDK usage 才是外部计费的权威值。
+- 跨机器恢复仍要求共享同一份持久化 SDK/lineage 状态；没有这份状态的无状态副本会 fail closed。
 - 带凭据的真实模型测试需要显式启用，不属于默认 CI。
 
 尚未实现：
@@ -292,6 +294,17 @@ runner 只绑定回环，在临时目录写脱敏 receipt，并且从不记录�
 | [CHANGELOG.md](CHANGELOG.md) | v0.1 说明 |
 
 在存在已发布镜像 digest 之前，把 Claude Code、OpenCode 或通用 Anthropic 客户端指向 `http://<gateway-host>:8080`，密钥用 Cursor key（BYOK）或 gateway access key（managed）。不要把 `@cursor/sdk` 嵌进另一个网关进程。
+
+### 客户端对应端点
+
+| 客户端 | 用这个 | 不要用 |
+|---|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL` → `POST /v1/messages` | Chat Completions |
+| Grok Build | 自定义模型 `api_backend = "responses"` → `POST /v1/responses` | Messages。若客户端带 `previous_response_id`，本网关会 422，再退回 `chat_completions` |
+| OpenAI SDK / 通用 Chat | `base_url` `…/v1` → `POST /v1/chat/completions` | 除非客户端是 Anthropic 形态，否则不要走 Messages |
+| new-api | Anthropic 上游 = Messages；OpenAI 上游 = Chat | 同一通道混用两种协议 |
+
+Grok Build / Claude Code 改的是**你本机项目**，用的是它们自己的工具。网关只提供模型推理。Cursor SDK 的 cwd 是按凭证隔离的空目录，所以模型有时会吐出那个绝对路径。写相对路径或你的项目路径就能改本地文件。BeefAPI 的 Cursor 通路也是同一件事。
 
 ## 安全
 

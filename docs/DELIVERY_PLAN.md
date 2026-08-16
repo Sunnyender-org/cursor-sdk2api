@@ -186,8 +186,8 @@ Capabilities are runtime truth, not marketing constants. `pending_tool_restart_r
 ### 7.4 Account Contract
 
 - Identity comes from official SDK/account surface where available.
-- Spending、limits 和 remaining 字段只有在当前凭据和官方可用接口真实返回时才出现。
-- 不抓取浏览器 Cookie，不要求 Team Admin API，不推断未返回额度。
+- Spending、limits 和 remaining 来自同一把 User API Key 的 Cursor Dashboard 当前周期接口；只返回上游真实数值。
+- 不抓取浏览器 Cookie，不要求 Team Admin API，不导入 OAuth token，不推断未返回额度。
 - 部分能力不可用时返回 `status: partial` 和 capability reason；身份成功不能被 spending 缺失升级为伪造数据。
 
 ### 7.5 Messages Contract
@@ -531,7 +531,7 @@ Gate:
 | Repository has no private code/runtime dependency | local | dependency graph plus `rg`/build from current local snapshot | passed-local | Clean-checkout proof remains a release gate |
 | Health reports runtime capability truth | fixture | health contract tests with enabled/disabled features | passed-local | Live-smoke fields remain explicitly false/unverified |
 | Models preserve exact Cursor IDs and params | real-smoke | live catalog snapshot with redacted identity | passed-live | Exact Sonnet 4.6, Fable 5, Grok 4.6 xhigh and Composer 2.5 IDs resolved |
-| Account endpoint never fabricates spending or remaining | fixture + real-smoke | partial/full account fixtures plus opt-in live read | fixture-passed | Live account read remains pending; browser Cookie path forbidden |
+| Account endpoint never fabricates spending or remaining | fixture + real-smoke | dashboard exchange/usage fixtures plus opt-in live read | fixture-passed | Live dashboard read required before release claim; browser Cookie path forbidden |
 | Messages non-stream text is protocol-correct | real-smoke | exact opaque marker | passed-live | Sonnet 4.6, Fable 5, Grok 4.6 xhigh and Composer 2.5 passed |
 | Messages stream forwards text incrementally | real-smoke | first/last delta timing trace without content logging | passed-live | All four required models passed with SDK `onDelta` |
 | Thinking block order is valid | real-smoke | Fable 5/Sonnet thinking SSE parser | pending | Must finish content blocks correctly |

@@ -7,5 +7,6 @@ coverage/
 .DS_Store
 .grok-companion/
 tmp/
+_temp/
 .cursor-sdk2api/
 *.tsbuildinfo

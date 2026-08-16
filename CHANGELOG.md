@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `/v1/account` now reads current-period spending, remaining included usage, model-family percentages, plan metadata, and limits through Cursor Dashboard using the same User API Key, without Cookie or Team Admin credentials. Missing usage remains a partial response rather than a fabricated zero quota.
+- Added authenticated `/v1/messages/count_tokens` as an explicitly marked local estimate for Claude Code context management; it never starts an SDK run or participates in billing.
+
+- Operator Console now uses BF Labs UI tokens, Button/Tabs/Notice/Reveal motion (entry, hover lift, orange progress pulse) with reduced-motion support. Console density is preserved; marketing-card invert is not used.
+- Console motion follow-through: overview CountUp, copy toast plus button flash, and a sliding rail indicator that follows the current page.
+- Failed requests now log the concrete `invalid_request` reason (redacted) next to `error_type`.
+- Operator Console and README pin client-to-endpoint recipes: Claude Code → Messages, Grok Build → Responses, OpenAI SDK → Chat. Console documents that outer-agent file tools stay local.
+- Responses `include` is accepted and not expanded so Grok Build's Responses backend can connect. `previous_response_id`, `store=true`, conversation, and hosted tools still fail closed.
+- Responses usage always includes `input_tokens_details` and `output_tokens_details` so strict clients (Grok Build) can deserialize the object.
+- Responses now accepts Grok's named-function/required tool choice, preserves full-history tool continuation, reports SDK reasoning usage, and keeps client-side tool paths anchored to the caller workspace instead of the internal SDK cwd.
+- Pending tool turns can recover after a gateway crash through persisted Agent lineage + `Agent.resume` + `local.force=true`; exact identity/catalog/result-batch checks and duplicate-same singleflight remain fail closed on conflict.
 - `/v1/chat/completions` protocol adapter over the existing Anthropic `ParsedMessages` run engine. Contract-tested text, OpenAI SSE, function tools, continuation, replay, deferred and cache-aware usage, images, and OpenAI error shapes.
 - `/v1/responses` protocol adapter over the same run engine. Contract-tested non-stream text, Responses SSE lifecycle, reasoning, base64 `input_image`, function tools, same-turn parallel calls, `function_call_output` continuation by `call_id`, duplicate-same replay, deferred/final cache-aware usage, `reasoning_effort` / `cursor_model_params`, and Responses-shaped errors. `previous_response_id`, `store=true`, background, conversation, include expansions, and hosted built-in tools fail closed. Operator Console includes a Responses playground tab.
 - Optional BF Labs Operator Console at `/console/`, bundled as static Vite assets and served by the existing Node process. It includes health, model/account reads, Messages/Chat/Responses playground, connection snippets, English/Chinese, and light/dark modes. Keys remain in page memory only.

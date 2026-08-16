@@ -1,0 +1,90 @@
+:root,
+.bf-theme {
+  --bf-color-charcoal: #111417;
+  --bf-color-ink: #1e2226;
+  --bf-color-graphite: #2f3338;
+  --bf-color-warm-white: #faf8f5;
+  --bf-color-orange: #ff6a33;
+  --bf-color-steel: #6b7177;
+  --bf-color-silver: #8f9499;
+  --bf-color-light-gray: #d9dce0;
+  --bf-color-soft-tone: #e7e2d7;
+  --bf-color-sand: #f1ece3;
+  --bf-color-pale-blue: #e8f1f7;
+  --bf-color-signal-blue: #4c7faf;
+
+  --bf-background: var(--bf-color-warm-white);
+  --bf-surface: color-mix(in srgb, var(--bf-color-charcoal) 3%, transparent);
+  --bf-surface-strong: var(--bf-color-charcoal);
+  --bf-foreground: var(--bf-color-charcoal);
+  --bf-foreground-muted: var(--bf-color-steel);
+  --bf-foreground-subtle: var(--bf-color-silver);
+  --bf-on-strong: var(--bf-color-warm-white);
+  --bf-accent: var(--bf-color-orange);
+  --bf-focus: var(--bf-color-orange);
+  --bf-divider: color-mix(in srgb, var(--bf-color-charcoal) 14%, transparent);
+
+  --bf-font-display: 'Space Grotesk', 'Avenir Next', 'Helvetica Neue', sans-serif;
+  --bf-font-body: Inter, 'Helvetica Neue', Arial, sans-serif;
+  --bf-font-cjk: 'Noto Sans SC', 'Source Han Sans CN', 'PingFang SC', sans-serif;
+
+  --bf-text-2xs: 0.625rem;
+  --bf-text-xs: 0.75rem;
+  --bf-text-sm: 0.875rem;
+  --bf-text-md: 1rem;
+  --bf-text-lg: 1.25rem;
+  --bf-text-xl: 1.75rem;
+  --bf-text-2xl: clamp(2.5rem, 5vw, 5.5rem);
+  --bf-text-display: clamp(4rem, 7vw, 8.25rem);
+
+  --bf-space-1: 0.25rem;
+  --bf-space-2: 0.5rem;
+  --bf-space-3: 0.75rem;
+  --bf-space-4: 1rem;
+  --bf-space-5: 1.5rem;
+  --bf-space-6: 2rem;
+  --bf-space-7: 3rem;
+  --bf-space-8: 4rem;
+  --bf-space-9: 6rem;
+  --bf-space-10: 9rem;
+
+  --bf-radius-control: 2px;
+  --bf-radius-surface: 4px;
+  --bf-radius-round: 999px;
+  --bf-control-sm: 2.25rem;
+  --bf-control-md: 3rem;
+  --bf-control-lg: 3.5rem;
+  --bf-content-max: 105rem;
+
+  --bf-duration-instant: 100ms;
+  --bf-duration-fast: 220ms;
+  --bf-duration-base: 360ms;
+  --bf-duration-slow: 700ms;
+  --bf-ease-standard: ease;
+  --bf-ease-forward: cubic-bezier(0.22, 1, 0.36, 1);
+  --bf-shadow-float: 0 24px 70px rgba(17, 20, 23, 0.12);
+}
+
+.bf-theme[data-tone='dark'] {
+  --bf-background: var(--bf-color-charcoal);
+  --bf-surface: color-mix(in srgb, var(--bf-color-warm-white) 5%, transparent);
+  --bf-surface-strong: var(--bf-color-warm-white);
+  --bf-foreground: var(--bf-color-warm-white);
+  --bf-foreground-muted: var(--bf-color-light-gray);
+  --bf-foreground-subtle: var(--bf-color-silver);
+  --bf-on-strong: var(--bf-color-charcoal);
+  --bf-divider: color-mix(in srgb, var(--bf-color-warm-white) 17%, transparent);
+}
+
+.bf-theme[data-tone='orange'] {
+  --bf-background: var(--bf-color-orange);
+  --bf-surface: color-mix(in srgb, var(--bf-color-warm-white) 15%, transparent);
+  --bf-surface-strong: var(--bf-color-charcoal);
+  --bf-foreground: var(--bf-color-charcoal);
+  --bf-foreground-muted: color-mix(in srgb, var(--bf-color-charcoal) 68%, transparent);
+  --bf-foreground-subtle: color-mix(in srgb, var(--bf-color-charcoal) 48%, transparent);
+  --bf-on-strong: var(--bf-color-warm-white);
+  --bf-accent: var(--bf-color-warm-white);
+  --bf-focus: var(--bf-color-charcoal);
+  --bf-divider: color-mix(in srgb, var(--bf-color-charcoal) 18%, transparent);
+}

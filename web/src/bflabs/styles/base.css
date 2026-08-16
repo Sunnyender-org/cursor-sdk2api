@@ -1,0 +1,46 @@
+.bf-theme,
+.bf-theme *,
+.bf-theme *::before,
+.bf-theme *::after {
+  box-sizing: border-box;
+}
+
+.bf-theme {
+  min-width: 0;
+  background: var(--bf-background);
+  color: var(--bf-foreground);
+  font-family: var(--bf-font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.bf-theme :where(button, input, textarea, select) {
+  font: inherit;
+}
+
+.bf-theme :where(button, a) {
+  color: inherit;
+}
+
+.bf-theme :where(a) {
+  text-decoration: none;
+}
+
+.bf-theme :where(img, svg) {
+  display: block;
+}
+
+.bf-theme ::selection {
+  background: var(--bf-color-orange);
+  color: var(--bf-color-charcoal);
+}
+
+.bf-theme :focus-visible {
+  outline: 2px solid var(--bf-focus);
+  outline-offset: 3px;
+}
+
+.bf-cjk {
+  font-family: var(--bf-font-cjk);
+}

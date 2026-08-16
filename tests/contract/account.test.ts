@@ -7,7 +7,7 @@ afterEach(async () => {
   if (ctx) await closeTestApp(ctx);
 });
 
-test("account is partial when spending and limits are not on the official surface", async () => {
+test("account is partial when dashboard spending and limits are unavailable", async () => {
   ctx = await startTestApp();
   const res = await api(ctx, "/v1/account");
   const body = (await res.json()) as {
@@ -28,7 +28,32 @@ test("account is partial when spending and limits are not on the official surfac
   expect(body.capabilities.identity).toBe(true);
   expect(body.capabilities.spending).toBe(false);
   expect(body.capabilities.limits).toBe(false);
-  expect(body.reasons.spending).toBe("official_sdk_surface_unavailable");
+  expect(body.reasons.spending).toBe("cursor_dashboard_unavailable");
+});
+
+test("account returns Cursor dashboard quota without exposing credentials", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      account: {
+        ok: true,
+        identity: { apiKeyName: "svc" },
+        spending: { source: "cursor_dashboard_rpc", plan_name: "Ultra", used_usd: 19.65 },
+        limits: { remaining_usd: 380.35, limit_usd: 400, used_percent: 4.9125 },
+      },
+    },
+  });
+  const raw = await (await api(ctx, "/v1/account", { apiKey: "secret-cursor-key" })).text();
+  const body = JSON.parse(raw) as {
+    status: string;
+    spending: Record<string, unknown>;
+    limits: Record<string, unknown>;
+    capabilities: { spending: boolean; limits: boolean };
+  };
+  expect(body.status).toBe("ok");
+  expect(body.spending.plan_name).toBe("Ultra");
+  expect(body.limits.remaining_usd).toBe(380.35);
+  expect(body.capabilities).toMatchObject({ spending: true, limits: true });
+  expect(raw).not.toContain("secret-cursor-key");
 });
 
 test("account degrades when identity itself is unavailable", async () => {

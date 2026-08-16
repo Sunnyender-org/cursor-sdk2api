@@ -20,6 +20,7 @@ import {
 import { redactSecrets, sdkFailure } from "../errors.js";
 import { ensurePrivateDir } from "../core/lineage-store.js";
 import { credentialFingerprint } from "../digest.js";
+import { fetchCursorDashboardQuota } from "../account/cursor-dashboard.js";
 
 const require = createRequire(import.meta.url);
 
@@ -55,6 +56,10 @@ function mapUsage(raw: unknown): SdkUsage | undefined {
   if (typeof value.totalTokens === "number") usage.totalTokens = value.totalTokens;
   if (typeof value.reasoningTokens === "number") usage.reasoningTokens = value.reasoningTokens;
   return usage;
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function asText(event: unknown): string {
@@ -281,7 +286,10 @@ export function createCursorRuntime(options: { stateDir: string }): SdkRuntime {
     },
     async getAccount(apiKey: string): Promise<SdkAccountResult> {
       try {
-        const me = await Cursor.me({ apiKey });
+        const [me, quota] = await Promise.all([
+          Cursor.me({ apiKey }),
+          fetchCursorDashboardQuota(apiKey),
+        ]);
         return {
           ok: true,
           identity: {
@@ -291,6 +299,40 @@ export function createCursorRuntime(options: { stateDir: string }): SdkRuntime {
             firstName: me.userFirstName,
             lastName: me.userLastName,
           },
+          ...(quota.available
+            ? {
+                spending: compactRecord({
+                  source: quota.source,
+                  plan_name: quota.planName,
+                  plan_price: quota.planPrice,
+                  plan_owner: quota.planOwner,
+                  used_usd: quota.usedUsd,
+                  total_spend_usd: quota.totalSpendUsd,
+                  bonus_spend_usd: quota.bonusSpendUsd,
+                  on_demand_spend_usd: quota.onDemandSpendUsd,
+                }),
+                limits: compactRecord({
+                  remaining_usd: quota.remainingUsd,
+                  limit_usd: quota.limitUsd,
+                  used_percent: quota.usedPercent,
+                  billing_cycle_start: quota.billingCycleStart,
+                  billing_cycle_end: quota.billingCycleEnd,
+                  cursor_models_percent_used: quota.cursorModelsPercentUsed,
+                  other_models_percent_used: quota.otherModelsPercentUsed,
+                  auto_models_percent_used: quota.autoModelsPercentUsed,
+                  on_demand_limit_type: quota.onDemandLimitType,
+                  on_demand_individual_limit: quota.onDemandIndividualLimit,
+                  on_demand_individual_used: quota.onDemandIndividualUsed,
+                  on_demand_individual_remaining: quota.onDemandIndividualRemaining,
+                  on_demand_pooled_limit: quota.onDemandPooledLimit,
+                  on_demand_pooled_used: quota.onDemandPooledUsed,
+                  on_demand_pooled_remaining: quota.onDemandPooledRemaining,
+                }),
+              }
+            : {
+                spendingReason: quota.reason,
+                limitsReason: quota.reason,
+              }),
         };
       } catch (error) {
         return {

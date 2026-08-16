@@ -12,6 +12,7 @@ test("health reports runtime capability truth without account data", async () =>
     config: {
       capabilities: {
         messages: true,
+        count_tokens: true,
         chat_completions: true,
         responses: true,
         streaming: true,
@@ -49,6 +50,7 @@ test("health reports runtime capability truth without account data", async () =>
   });
   expect(body.capabilities).toMatchObject({
     messages: true,
+    count_tokens: true,
     chat_completions: true,
     responses: true,
     streaming: true,
@@ -80,6 +82,7 @@ test("health capabilities follow runtime config, not marketing constants", async
     config: {
       capabilities: {
         messages: true,
+        count_tokens: true,
         chat_completions: false,
         responses: false,
         streaming: false,

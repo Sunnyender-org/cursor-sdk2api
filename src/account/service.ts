@@ -13,8 +13,8 @@ export async function readAccount(sdk: SdkRuntime, apiKey: string): Promise<Reco
       },
       reasons: {
         identity: result.reason,
-        spending: "official_sdk_surface_unavailable",
-        limits: "official_sdk_surface_unavailable",
+        spending: "cursor_dashboard_unavailable",
+        limits: "cursor_dashboard_unavailable",
       },
     };
   }
@@ -39,8 +39,8 @@ export async function readAccount(sdk: SdkRuntime, apiKey: string): Promise<Reco
       limits: Boolean(limits),
     },
     reasons: {
-      ...(spending ? {} : { spending: "official_sdk_surface_unavailable" }),
-      ...(limits ? {} : { limits: "official_sdk_surface_unavailable" }),
+      ...(spending ? {} : { spending: result.spendingReason ?? "cursor_dashboard_unavailable" }),
+      ...(limits ? {} : { limits: result.limitsReason ?? "cursor_dashboard_unavailable" }),
     },
   };
 }

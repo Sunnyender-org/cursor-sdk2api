@@ -11,6 +11,7 @@ import { GatewayError, invalidRequest, notFound, redactSecrets, toPublicErrorBod
 import { requestId as newRequestId } from "../ids.js";
 import type { Logger } from "../log.js";
 import { parseMessagesRequest } from "../protocols/anthropic/parse.js";
+import { estimateAnthropicInputTokens } from "../protocols/anthropic/count-tokens.js";
 import { writeSseError } from "../protocols/anthropic/sse.js";
 import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
 import { writeChatStreamError } from "../protocols/openai-chat/sse.js";
@@ -160,6 +161,16 @@ export function createApp(input: {
         const auth = authenticate(req, config);
         const account = await readAccount(sdk, auth.cursorApiKey);
         sendJson(res, 200, account, requestId);
+        return;
+      }
+
+      if (method === "POST" && path === "/v1/messages/count_tokens") {
+        authenticate(req, config);
+        const body = await readJsonBody(req, config.maxBodyBytes);
+        if (body === undefined) throw invalidRequest("JSON body is required");
+        const parsed = parseMessagesRequest(body);
+        res.setHeader("x-cursor-sdk2api-token-count", "estimated");
+        sendJson(res, 200, { input_tokens: estimateAnthropicInputTokens(body, parsed) }, requestId);
         return;
       }
 

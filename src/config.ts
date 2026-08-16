@@ -39,6 +39,7 @@ export interface GatewayConfig {
 
 export interface RuntimeCapabilities {
   messages: boolean;
+  count_tokens: boolean;
   chat_completions: boolean;
   responses: boolean;
   streaming: boolean;
@@ -55,6 +56,7 @@ export interface RuntimeCapabilities {
 
 export const DEFAULT_CAPABILITIES: RuntimeCapabilities = {
   messages: true,
+  count_tokens: true,
   chat_completions: true,
   responses: true,
   streaming: true,

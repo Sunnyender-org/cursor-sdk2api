@@ -4,7 +4,7 @@
 
 Independent MIT gateway that exposes the official Cursor TypeScript SDK (`@cursor/sdk`) as Anthropic- and OpenAI-compatible HTTP APIs.
 
-This is **not** an official Cursor or Anysphere product. It does not reverse private Cursor transports, cookies, Desktop/CLI stores, or IDE sessions. The only Cursor execution engine is the published `@cursor/sdk` package. Users must supply a legally obtained Cursor API key and comply with Cursor Terms of Service.
+This is **not** an official Cursor or Anysphere product. Model execution does not reverse private Cursor transports, cookies, Desktop/CLI stores, or IDE sessions; the only execution engine is the published `@cursor/sdk` package. Account usage optionally calls the Cursor Dashboard control plane with the same User API Key, as documented below. Users must supply a legally obtained Cursor API key and comply with Cursor Terms of Service.
 
 **v0.1 is Anthropic Messages-first.** `/v1/chat/completions` and `/v1/responses` are protocol adapters over that same run engine (contract-tested, not live-model certified).
 
@@ -15,7 +15,8 @@ This is **not** an official Cursor or Anysphere product. It does not reverse pri
 | `GET` | `/console/` | none to load | Optional BF Labs Operator Console. API calls from the page still require a key, which stays in the current browser tab's React memory only. |
 | `GET` | `/health` | none | Build, SDK version, readiness, **implemented** capability bits, network transport modes, and a separate `verification` object. Capability `true` means the gateway implements the path; it is not a live-model acceptance claim. `/health` never includes account data, keys, or proxy URLs. |
 | `GET` | `/v1/models` | required | Live `Cursor.models.list()` catalog with exact public IDs. Empty list plus an explicit reason when unavailable. |
-| `GET` | `/v1/account` | required | Identity from `Cursor.me()`. Spending and limits appear only when the official surface returns them. |
+| `GET` | `/v1/account` | required | Identity from `Cursor.me()` plus current billing-cycle usage from Cursor Dashboard using the same User API Key. No Cookie, Team Admin key, or OAuth token is required. |
+| `POST` | `/v1/messages/count_tokens` | required | Local conservative estimate for Claude Code context sizing. Marked by `x-cursor-sdk2api-token-count: estimated`; never used for billing. |
 | `POST` | `/v1/messages` | required | Anthropic Messages text, SSE, client tools, same-turn parallel tools, multi-round continuation, and in-process replay. |
 | `POST` | `/v1/chat/completions` | required | OpenAI Chat Completions adapter: text, `data:` SSE + `[DONE]`, function tools, continuation, `reasoning_content`, base64 `image_url`. Same session/run engine as Messages. |
 | `POST` | `/v1/responses` | required | OpenAI Responses adapter: `input` string or items, Responses SSE + `response.completed`, reasoning, base64 `input_image`, `type=function` tools, `function_call_output` continuation by `call_id`. Same session/run engine as Messages. `previous_response_id` / hosted tools / `store=true` fail closed. The Console playground supports Responses directly. |
@@ -68,7 +69,7 @@ Copy [`.env.example`](.env.example) for the full configuration surface. Never co
 The official SDK does not automatically inherit the host proxy. When a supported proxy variable is set, the gateway routes **both** SDK data planes:
 
 - local Agent runs switch to HTTP/1.1 through `proxy-agent`
-- catalog and account fetches use Undici's environment proxy dispatcher
+- catalog, account, and Cursor Dashboard usage fetches use Undici's environment proxy dispatcher
 
 `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` are accepted in uppercase or lowercase. Proxy URLs must use `http://` or `https://`. SOCKS and PAC fail closed, because the two SDK data planes cannot support them consistently. Direct (unproxied) Agent runs keep the official HTTP/2 transport.
 
@@ -134,7 +135,7 @@ curl -s localhost:8080/v1/responses \
   -d '{"model":"composer-2.5","input":"hello"}'
 ```
 
-Stream events use Responses names (`response.created` … `response.completed`). On error the stream emits a Responses `error` event and does not emit `response.completed`. Hosted tools, `store=true`, background, conversation, and include expansions fail closed.
+Stream events use Responses names (`response.created` … `response.completed`). On error the stream emits a Responses `error` event and does not emit `response.completed`. Hosted tools, `store=true`, background, conversation, and unknown include expansions fail closed. Grok's optional `reasoning.encrypted_content` include is accepted but omitted.
 
 `function_call_output.output` accepts a string or an array of text content parts. Image/file tool-output parts fail closed with `422` until they can be mapped to the SDK without semantic loss.
 
@@ -172,7 +173,7 @@ Tool continuation uses the same process-local Agent/Run. The latest user turn mu
 }
 ```
 
-For `/v1/messages`, `max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. `temperature`, `top_p`, `stop_sequences`, and `tool_choice` are accepted but **not mapped** to `@cursor/sdk`. For `/v1/chat/completions` and `/v1/responses`, `tool_choice` must be `auto` or omitted; other values fail closed with `422`.
+For `/v1/messages`, `max_tokens` is accepted so Claude Code-shaped requests parse. The SDK harness has no precise max-token enforcement, and the gateway does not emulate one. Tool choice is mapped into Harness directives: Messages supports `auto` / `any` / named `tool`; Chat and Responses support `auto` / `required` / named `function`. Serial-tool flags are honored; `tool_choice=none` remains fail closed.
 
 Errors:
 
@@ -213,17 +214,17 @@ Pending callbacks are ordinary in-memory Promises. They cannot be serialized acr
 MVP owns live runs in the process that created them.
 
 - Blue/green and multi-instance deploys need connection draining and sticky ownership of a session.
-- After a process restart, unfinished tool continuations return `409 cursor_session_lost`.
+- After a process restart, an unfinished tool continuation can resume when credential, model, model params, complete tool-id batch, and tool catalog match the owner-only lineage record.
 - The gateway will not create a new Agent to pretend the original pending Run was recovered.
 
-Completed follow-up with `x-cursor-session-id` can `Agent.resume` within `SESSION_TTL_MS` when credential, model, and explicit model parameters match. `pending_tool_restart_resume` stays `false` until a kill/restart acceptance proves exact callback recovery.
+Completed follow-up with `x-cursor-session-id` can `Agent.resume` within `SESSION_TTL_MS` when credential, model, and explicit model parameters match. Pending tool recovery uses the same SDK store plus `local.force=true`; health reports `pending_tool_restart_resume=true` after a real kill/restart acceptance.
 
 `STATE_DIR` holds:
 
 - official JSONL SDK store at `$STATE_DIR/sdk-store/<credential-fingerprint>`
 - owner-only lineage metadata at `$STATE_DIR/lineage` (`0700` / `0600`)
 
-Host/dev default is `$TMPDIR/cursor-sdk2api/state`. The image and compose default is `/data`. Lineage stores resume metadata only (session id, SDK agent id, fingerprint, model, explicit params, state, pending tool ids, optional result digest, timestamps). It does not store API keys, prompts, or tool payloads. Assistant replay bodies are not persisted, so duplicate-same after restart is also `cursor_session_lost`.
+Host/dev default is `$TMPDIR/cursor-sdk2api/state`. The image and compose default is `/data`. Lineage stores resume metadata only (session id, SDK agent id, fingerprint, model, explicit params, state, pending tool ids/names, optional result digest, timestamps). It does not store API keys, prompts, tool inputs, or tool results. Assistant replay bodies are not persisted.
 
 BYOK credentials share process capacity limits, but official SDK stores and empty workspaces are partitioned by credential fingerprint. That is process-local tenant isolation, not a claim of hardened hostile multi-tenant hosting.
 
@@ -231,13 +232,13 @@ Development defaults: 4 global active runs, 2 per credential, 30 minute session 
 
 ## Status and evidence
 
-v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and fail-closed pending restart. Chat Completions and Responses are contract-tested protocol adapters on that engine. They are not live-model acceptance claims. The Operator Console playground can exercise Messages, Chat Completions, and Responses from the same prompt surface.
+v0.1 implements Messages text/SSE, client customTools/MCP, same-turn parallel tools, multi-round continuation, in-process replay, tenant/model isolation, completed Agent resume, and exact pending-tool restart recovery. Chat Completions and Responses are protocol adapters on the same coordinator. The Operator Console playground can exercise all three protocols.
 
 A sanitized, non-secret acceptance summary is in [`docs/evidence/2026-08-15-live-smoke.md`](docs/evidence/2026-08-15-live-smoke.md). That receipt is a dated local sample, not a guarantee for every credential, region, or image:
 
 - Host Claude Sonnet 4.6 and Fable 5 passed the required proxied matrix, including parallel tools and a Claude Code-shaped Fable request.
 - Composer 2.5 passed the required host matrix, including same-turn parallel selection.
-- Grok 4.6 xhigh passed text, SSE, single tool, multi-round, replay, pending-restart fail-closed, and completed resume. Same-turn parallel selection is **model-nondeterministic** in that sample and is **not** a guaranteed behavior.
+- Grok 4.6 xhigh Responses passed named-tool continuation, full-history continuation, same-turn two-tool parallel selection, cache-aware usage, local client-workspace file edits, and forced kill/restart pending-tool recovery.
 - A Node 22 container proved both SDK data planes honor a configured HTTP(S) proxy, and fail when that proxy is unreachable. Fable container parallel/upstream success was **not** perfectly repeatable and is **not** marketed as a fully green container matrix.
 - Runtime `/health.verification.live_smoke` stays `false`. A binary cannot infer that a different deployment inherited this receipt.
 
@@ -247,13 +248,14 @@ Thinking and image blocks are implemented and contract-tested. Live thinking/ima
 
 - Official `@cursor/sdk` is required at runtime. Its own license and Cursor Terms apply. See [NOTICE.md](NOTICE.md).
 - Production `npm audit --omit=dev` (2026-08-15) reports 3 transitive findings in the SDK tree: `undici` (high) and `@connectrpc/connect-node` / `@cursor/sdk` (moderate). `fixAvailable` is false. Do not run a destructive `npm audit fix`.
-- `Cursor.me()` does not currently expose spending or remaining quota; `/v1/account` is therefore `partial` unless a future official surface returns those fields.
-- Hard crash recovery of an in-flight tool turn is `cursor_session_lost`, not HA.
+- Cursor Dashboard usage is queried by exchanging the supplied User API Key for a short-lived dashboard access token, then calling `GetCurrentPeriodUsage` and `GetPlanInfo`. If that control plane is unavailable, identity still returns and `/v1/account` degrades to `partial` with an explicit reason.
+- `count_tokens` is an estimate because `@cursor/sdk` has no tokenizer preflight API. Final SDK usage remains authoritative for accounting.
+- Cross-machine recovery still requires the same persisted SDK/lineage state; a stateless replica without that state fails closed.
 - Credentialed live-model tests are opt-in and are not part of default CI.
 
 Not implemented:
 
-- Responses `previous_response_id` reconstruction, `store=true`, background mode, conversation objects, include expansions, or hosted built-in tools (`web_search`, `file_search`, `computer`, `shell`, `apply_patch`)
+- Responses `previous_response_id` reconstruction, `store=true`, background mode, conversation objects, `include` expansions, or hosted built-in tools (`web_search`, `file_search`, `computer`, `shell`, `apply_patch`)
 - Cursor Agent Profile (`/v1/agents`, native shell/edit, plan mode)
 - distributed session ownership / Redis / Postgres
 
@@ -294,6 +296,17 @@ The runner binds loopback only, writes a redacted receipt under temp, and never 
 | [CHANGELOG.md](CHANGELOG.md) | v0.1 notes |
 
 Until a published image digest exists, point Claude Code, OpenCode, or a generic Anthropic client at `http://<gateway-host>:8080` with the Cursor key (BYOK) or gateway access key (managed). Do not embed `@cursor/sdk` inside another gateway process.
+
+### Client to endpoint
+
+| Client | Use | Do not |
+|---|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL` → `POST /v1/messages` | Chat Completions |
+| Grok Build | custom model `api_backend = "responses"` → `POST /v1/responses` | Messages. If the client sends `previous_response_id`, this gateway returns 422; fall back to `chat_completions`. |
+| OpenAI SDK / generic Chat | `base_url` `…/v1` → `POST /v1/chat/completions` | Messages unless the client is Anthropic-shaped |
+| new-api | Anthropic upstream = Messages; OpenAI upstream = Chat | Mixing the two on one channel |
+
+Grok Build and Claude Code edit **your local project** with their own tools. The gateway only runs the model. Cursor SDK `cwd` is an empty per-credential directory, so the model may emit that absolute path. Relative paths or your project paths write local files. A BeefAPI Cursor channel is the same split.
 
 ## Security
 

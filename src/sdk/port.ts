@@ -141,6 +141,8 @@ export type SdkAccountResult =
       identity: SdkIdentity;
       spending?: Record<string, unknown>;
       limits?: Record<string, unknown>;
+      spendingReason?: string;
+      limitsReason?: string;
     }
   | { ok: false; reason: string; message: string };
 
