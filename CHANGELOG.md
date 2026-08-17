@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Responses now accepts Codex/sub2api `text.format` (including `json_schema`) and skips `input` `additional_tools` items so those clients no longer 422/400. Hosted tools in top-level `tools`, `previous_response_id`, and `store=true` still fail closed.
 - Anthropic `/v1/messages` now accepts sub2api-style `system`/`developer` (folded into `system`) and `tool`/`function` (mapped to user `tool_result`) roles so those clients no longer 422.
 - `/v1/account` now reads current-period spending, remaining included usage, model-family percentages, plan metadata, and limits through Cursor Dashboard using the same User API Key, without Cookie or Team Admin credentials. Missing usage remains a partial response rather than a fabricated zero quota.
 - Added authenticated `/v1/messages/count_tokens` as an explicitly marked local estimate for Claude Code context management; it never starts an SDK run or participates in billing.
