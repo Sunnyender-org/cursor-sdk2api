@@ -106,10 +106,12 @@ function rejectUnsupported(raw: Record<string, unknown>): void {
     }
     const format = (text as { format?: unknown }).format;
     if (format !== undefined) {
-      const type = format && typeof format === "object" ? (format as { type?: unknown }).type : undefined;
-      if (type !== "text") {
-        throw invalidRequest('text.format must be omitted or {type:"text"}');
+      if (!format || typeof format !== "object" || Array.isArray(format)) {
+        throw invalidRequest("text.format must be an object if provided");
       }
+      // Codex / sub2api send json_schema (and other format types). Cursor SDK
+      // does not enforce structured output, so this known optional field is
+      // accepted but omitted.
     }
   }
 }
@@ -191,6 +193,12 @@ function parseInput(input: unknown): { messages: AnthropicMessage[]; systemParts
     if (!item || typeof item !== "object") throw invalidRequest("each input item must be an object");
     const raw = item as Record<string, unknown>;
     const type = typeof raw.type === "string" ? raw.type : inferItemType(raw);
+
+    if (type === "additional_tools") {
+      // Codex Lite advertises hosted/function tools as an input item. Nested
+      // hosted tools are not lifted into top-level tools; the item is skipped.
+      continue;
+    }
 
     if (type === "function_call_output") {
       flushAssistant();
