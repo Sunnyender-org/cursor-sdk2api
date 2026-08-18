@@ -86,11 +86,11 @@ Set `STATE_DIR` for:
 
 Host / local-dev default (no `STATE_DIR`) is a process temp path: `$TMPDIR/cursor-sdk2api/state`. The container **image** and `docker-compose.yml` default `STATE_DIR` to `/data` and compose declares a named volume. A bare `docker run` without `-e STATE_DIR` still gets `/data` from the image `ENV`.
 
-Lineage stores only session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids, optional result digest, and timestamps. It does not store API keys, prompts, or tool args/results. Assistant replay bodies are **not** persisted; in-process duplicate-same still works, but after a restart a tool-result replay is `409 cursor_session_lost`.
+Lineage stores only session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids and names, optional result digest, and timestamps. It does not store API keys, prompts, tool args, or tool results. Pending tool results can resume the persisted SDK Agent after restart when the client resends the exact tool catalog and pending id batch. Assistant replay bodies are **not** persisted, so duplicate-same replay after a later restart is still unavailable.
 
-Session/registry TTL and the periodic sweep share the same clock. Completed lineage expires with `SESSION_TTL_MS` (default 30 minutes). Pending records stay until that TTL so a restart `tool_result` is a deterministic `cursor_session_lost`, then they are deleted. Graceful shutdown does not delete recoverable completed lineage.
+Session/registry TTL and the periodic sweep share the same clock. Completed and recoverable pending lineage expire with `SESSION_TTL_MS` (default 30 minutes), then they are deleted. Graceful shutdown does not delete recoverable lineage.
 
-Completed follow-up with `x-cursor-session-id` can `Agent.resume` within the session TTL if credential and model match. Pending tool callbacks are never restored.
+Completed follow-up with `x-cursor-session-id` can `Agent.resume` within the session TTL if credential and model match. Pending callback Promises themselves are not serialized; after restart the gateway resumes the persisted SDK Agent and injects the exact host tool-result batch after validating credential, model, catalog, and ids.
 
 ## Unified gateway key and BYOK
 

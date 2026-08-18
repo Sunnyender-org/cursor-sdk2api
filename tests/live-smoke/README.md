@@ -24,7 +24,7 @@ Child mode binds **127.0.0.1** on a free port, uses isolated temp `STATE_DIR` / 
 
 ## What it checks
 
-Per resolved catalog id: authenticated `/v1/models`, non-stream text, SSE shape, single tool continuation, parallel two-tool batch, multi-round two batches, in-process duplicate-same replay, pending `tool_result` after hard restart (`cursor_session_lost`), completed `x-cursor-session-id` resume after restart. Fable also sends a Claude Code-style Messages header/body shape.
+Per resolved catalog id: authenticated `/v1/models`, non-stream text, SSE shape, single tool continuation, parallel two-tool batch, multi-round two batches, in-process duplicate-same replay, pending `tool_result` recovery after a hard restart, and completed `x-cursor-session-id` resume after restart. Fable also sends a Claude Code-style Messages header/body shape.
 
 Catalog-missing required names are `catalog_missing` failures, not skips. Capability skips happen only when the live catalog lists parameters and omits that capability.
 

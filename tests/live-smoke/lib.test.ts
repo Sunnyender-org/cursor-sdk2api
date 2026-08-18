@@ -178,9 +178,9 @@ test("attach-mode not_run restart is incomplete, not a pass", () => {
   const cases: SmokeCase[] = [
     { id: "catalog/authenticated", case: "catalog_auth", status: "pass", required: true },
     {
-      id: "composer-2.5/pending_restart_lost",
+      id: "composer-2.5/pending_restart_resume",
       model: "composer-2.5",
-      case: "pending_restart_lost",
+      case: "pending_restart_resume",
       status: "not_run",
       required: true,
       reason: "attach_mode_no_process_control",

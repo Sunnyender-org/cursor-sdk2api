@@ -168,12 +168,12 @@ Health returns at least:
     "parallel_tools": true,
     "replay": true,
     "agent_resume": true,
-    "pending_tool_restart_resume": false
+    "pending_tool_restart_resume": true
   }
 }
 ```
 
-Capabilities are runtime truth, not marketing constants. `pending_tool_restart_resume` remains false until kill/restart live acceptance proves exact pending callback recovery.
+Capabilities are runtime truth, not marketing constants. `pending_tool_restart_resume` is enabled because kill/restart live acceptance now proves exact pending callback recovery through persisted SDK Agent lineage. Credential, model, tool catalog, and pending tool-id mismatches still fail closed.
 
 ### 7.3 Models Contract
 
@@ -548,7 +548,7 @@ Gate:
 | Default logs contain no secrets/tool payloads | local + real-smoke | log capture, secret canary scanner and redacted receipt scan | passed-live | Three isolated receipts contained no credential, Bearer token, home path or personal identity |
 | Client disconnect cancels or retains by contract | integration | abort-before-output and abort-after-tool fixtures | passed-local | Each path deterministic |
 | Graceful shutdown drains active sessions | integration | controlled signal and active-count harness | passed-local | Includes drain continuation and capacity behavior |
-| Hard restart behavior is explicit | real-smoke | kill/restart pending tool test | passed-live | All four required models returned `cursor_session_lost`, never empty success |
+| Hard restart behavior is explicit | real-smoke | kill/restart pending tool test | passed-live | Sonnet 4.6 and Grok 4.6 resumed the persisted pending SDK Agent and returned the opaque result marker; mismatches remain fail-closed |
 | Docker image starts independently | local | Docker build/run, HEALTHCHECK and health readback | passed-local | Clean-checkout rebuild remains a release gate; no external bind mount |
 | Claude Code Fable 5 passes | real-smoke | isolated real client transcript receipt | passed-live | No raw prompts/tool results retained |
 | OpenAI Chat compatibility passes | real-smoke | v0.2 client matrix | pending | Local Chat contract suite exists; live Chat matrix is not claimed |
@@ -635,7 +635,7 @@ Debug mode is explicit opt-in, allowlisted and still redacted；README 必须警
 |---|---|---|---|
 | SDK API/version drift | build or runtime break | exact pin, types inspection, full matrix on upgrade | block upgrade release |
 | SDK all-rights-reserved/Terms change | distribution risk | dependency only, current Terms review, partner/legal confirmation | block public release if unresolved |
-| Pending callback lost on crash | broken tool continuation | drain, explicit session_lost, restart acceptance, later durable broker | no HA claim until passed |
+| Pending callback recovery drifts | broken tool continuation | persisted SDK Agent lineage, exact identity/catalog/batch checks, restart acceptance | block release if restart matrix regresses |
 | Duplicate tool result | repeated external side effect | digest idempotency and one resolve | block v0.1 |
 | Mixed credentials or tenants | privacy/correctness incident | fingerprint binding, negative tests and owner lease | block v0.1 |
 | Empty SDK terminal | false success and wrong billing | semantic output gate | block v0.1 |

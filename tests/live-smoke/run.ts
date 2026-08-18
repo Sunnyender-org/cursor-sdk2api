@@ -181,7 +181,7 @@ async function runModelMatrix(
   out.push(await isolate(ctx, model, "parallel_tools", () => runParallelTools(ctx, model)));
   out.push(await isolate(ctx, model, "multi_round", () => runMultiRound(ctx, model)));
   out.push(await isolate(ctx, model, "duplicate_same", () => runDuplicateSame(ctx, model)));
-  out.push(await isolate(ctx, model, "pending_restart_lost", () => runPendingRestart(ctx, model)));
+  out.push(await isolate(ctx, model, "pending_restart_resume", () => runPendingRestart(ctx, model)));
   out.push(await isolate(ctx, model, "completed_resume", () => runCompletedResume(ctx, model)));
   if (model.toLowerCase().includes("fable")) {
     out.push(await isolate(ctx, model, "claude_code_shape", () => runClaudeCodeShape(ctx, model)));
@@ -521,9 +521,9 @@ async function runDuplicateSame(ctx: RunContext, model: string): Promise<SmokeCa
 async function runPendingRestart(ctx: RunContext, model: string): Promise<SmokeCase> {
   if (!ctx.child) {
     return {
-      id: `${model}/pending_restart_lost`,
+      id: `${model}/pending_restart_resume`,
       model,
-      case: "pending_restart_lost",
+      case: "pending_restart_resume",
       status: "not_run",
       required: true,
       reason: "attach_mode_no_process_control",
@@ -542,36 +542,43 @@ async function runPendingRestart(ctx: RunContext, model: string): Promise<SmokeC
   });
   const toolId = opened.tool_uses[0]?.id;
   if (opened.status !== 200 || !toolId) {
-    return failCase(model, "pending_restart_lost", { ...opened, reason: "no_tool_use" });
+    return failCase(model, "pending_restart_resume", { ...opened, reason: "no_tool_use" });
   }
   await ctx.child.restart();
   ctx.baseUrl = ctx.child.baseUrl;
+  const marker = opaqueMarker("restart");
   const resumed = await postMessages({
     baseUrl: ctx.baseUrl,
     apiKey: ctx.apiKey,
     timeoutMs: ctx.timeoutMs,
+    marker,
     body: {
       model,
       max_tokens: 128,
-      messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "after-restart" }] }],
+      tools: liveTools(),
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: `The recovered tool result is ${marker}. Reply with exactly ${marker}.`,
+            },
+          ],
+        },
+      ],
     },
   });
-  if (resumed.status !== 409 || resumed.error_type !== "cursor_session_lost") {
-    return failCase(model, "pending_restart_lost", {
+  if (resumed.status !== 200 || resumed.error_type || !resumed.marker_hit) {
+    return failCase(model, "pending_restart_resume", {
       ...resumed,
-      reason: "expected_session_lost",
+      reason: resumed.marker_hit ? resumed.error_type : "recovered_marker_missing",
     });
   }
-  return {
-    id: `${model}/pending_restart_lost`,
-    model,
-    case: "pending_restart_lost",
-    status: "pass",
-    required: true,
-    http_status: resumed.status,
-    error_type: resumed.error_type,
+  return passCase(model, "pending_restart_resume", resumed, {
     duration_ms: opened.duration_ms + resumed.duration_ms,
-  };
+  });
 }
 
 async function runCompletedResume(ctx: RunContext, model: string): Promise<SmokeCase> {

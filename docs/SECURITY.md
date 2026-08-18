@@ -31,7 +31,7 @@ separately protected environment secret.
 - Managed requests authenticate with the gateway key, but SDK sessions bind to the selected Cursor credential fingerprint and model. Continuation cannot rotate to another account.
 - SDK stores and empty workspaces are partitioned by credential fingerprint with owner-only directories; a tenant never receives another tenant's partition path or Agent ID through the HTTP API.
 - Duplicate different tool results fail closed to avoid a second side effect.
-- After restart, pending continuations are `cursor_session_lost` rather than a silent new Agent.
+- After restart, pending continuations resume only from persisted SDK Agent lineage with an exact credential, model, tool catalog, and pending tool-id batch. Any mismatch fails closed rather than starting a silent new Agent.
 - Completed resume is bound to credential fingerprint + model. Mismatch is `409 cursor_session_conflict`.
 - Gateway lineage files are owner-only (`0700`/`0600`) and contain only resume metadata, including non-secret model parameters; they omit API keys, prompts, system text, tool schemas/args/results, and assistant replay bodies. Corrupt records are quarantined and ignored. Optional `lastResultDigest` is a hash, not a payload.
 - `STATE_DIR` is sensitive local state: lineage metadata plus the official SDK store (conversation/checkpoint payloads). Treat it as owner-only. Prefer an encrypted volume and `0700` access; do not share or backup the directory as if it were anonymous cache.
