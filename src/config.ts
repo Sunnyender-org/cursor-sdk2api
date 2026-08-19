@@ -50,6 +50,9 @@ export interface RuntimeCapabilities {
   replay: boolean;
   agent_resume: boolean;
   pending_tool_restart_resume: boolean;
+  transcript_tool_recovery?: boolean;
+  stale_auth_recovery?: boolean;
+  managed_account_failover?: boolean;
   streaming_impl?: "sdk_onDelta";
   store_backend?: "jsonl";
 }
@@ -67,6 +70,9 @@ export const DEFAULT_CAPABILITIES: RuntimeCapabilities = {
   replay: true,
   agent_resume: true,
   pending_tool_restart_resume: true,
+  transcript_tool_recovery: true,
+  stale_auth_recovery: true,
+  managed_account_failover: true,
   streaming_impl: "sdk_onDelta",
   store_backend: "jsonl",
 };
@@ -108,7 +114,7 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     sessionTtlMs,
     replayTtlMs: envInt("REPLAY_TTL_MS", 10 * 60_000),
     runDeadlineMs: envInt("RUN_DEADLINE_MS", 60 * 60_000),
-    firstEventTimeoutMs: envInt("FIRST_EVENT_TIMEOUT_MS", 60_000),
+    firstEventTimeoutMs: envInt("FIRST_EVENT_TIMEOUT_MS", 40_000),
     toolBatchSettleMs: envInt("TOOL_BATCH_SETTLE_MS", 1_500),
     catalogCacheMs: envInt("CATALOG_CACHE_MS", 5 * 60_000),
     sweepIntervalMs: envInt("SWEEP_INTERVAL_MS", 5_000),

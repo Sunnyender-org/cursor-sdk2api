@@ -1,6 +1,6 @@
 import { digestJson } from "../digest.js";
 import type { Clock } from "../clock.js";
-import type { SdkCustomTool } from "../sdk/port.js";
+import type { SdkCustomTool, SdkCustomToolResult } from "../sdk/port.js";
 import type { AnthropicTool } from "../protocols/anthropic/types.js";
 import type { Session } from "./session.js";
 
@@ -9,6 +9,7 @@ export function mapClientTools(
   session: Session,
   clock: Clock,
   onExecute: (session: Session) => void,
+  completedResults?: Map<string, SdkCustomToolResult[]>,
 ): Record<string, SdkCustomTool> {
   const mapped: Record<string, SdkCustomTool> = {};
   for (const tool of tools) {
@@ -16,6 +17,9 @@ export function mapClientTools(
       description: tool.description,
       inputSchema: tool.input_schema,
       async execute(args, context) {
+        const completed = completedResults?.get(completedToolSignature(tool.name, args));
+        const replay = completed?.shift();
+        if (replay !== undefined) return replay;
         const call = session.createPending(
           tool.name,
           args,
@@ -32,6 +36,10 @@ export function mapClientTools(
     };
   }
   return mapped;
+}
+
+export function completedToolSignature(name: string, input: unknown): string {
+  return digestJson({ name, input: input ?? {} });
 }
 
 export function resultDigest(toolUseId: string, content: string, isError: boolean): string {

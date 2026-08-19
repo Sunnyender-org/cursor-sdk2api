@@ -86,6 +86,35 @@ test("managed routing chooses an account whose live catalog contains the request
   expect(ctx.sdk.lastCreate?.apiKey).toBe("cursor-b");
 });
 
+test("pre-semantic provider failure retries once on another managed account", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      createErrorsByApiKey: {
+        "cursor-a": { message: "provider connection reset before first event" },
+      },
+      agentScripts: [[[{ type: "text", chunks: ["served-by-b"] }]]],
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "served-by-b")).toBe(true);
+  expect(ctx.sdk.createCalls.map((call) => call.apiKey)).toEqual(["cursor-a", "cursor-b"]);
+  expect(ctx.sdk.agents.map((agent) => agent.input.apiKey)).toEqual(["cursor-b"]);
+});
+
 test("managed model catalog returns the union from every configured account", async () => {
   ctx = await startTestApp({
     config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
@@ -286,6 +315,58 @@ test("restart recovery resolves the original account from persisted lineage", as
   });
   expect(continued.status).toBe(200);
   expect(ctx.sdk.lastResume?.apiKey).toBe("cursor-a");
+});
+
+test("full transcript cold-branches a tool continuation when its managed account was removed", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      agentScripts: [
+        [[{ type: "tools", calls: [{ name: "lookup", input: { q: "weather" } }] }]],
+        [[
+          { type: "tools", calls: [{ name: "lookup", input: { q: "weather" } }] },
+          { type: "text", chunks: ["recovered-on-b"] },
+        ]],
+      ],
+    },
+  });
+  const accountA = await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+  const opened = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("use tool", [weatherTool()])),
+  });
+  const openedBody = (await opened.json()) as {
+    content: Array<{ type: string; id?: string; name?: string; input?: unknown }>;
+  };
+  const call = openedBody.content.find((item) => item.type === "tool_use");
+  expect(ctx.sdk.agents[0]?.input.apiKey).toBe("cursor-a");
+  expect(ctx.app.accounts.remove(accountA)).toBe(true);
+
+  const continued = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 64,
+      tools: [weatherTool()],
+      messages: [
+        { role: "user", content: "use tool" },
+        { role: "assistant", content: [call] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: call?.id, content: "sunny" }] },
+      ],
+    }),
+  });
+  expect(continued.status).toBe(200);
+  const body = (await continued.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "recovered-on-b")).toBe(true);
+  expect(ctx.sdk.agents[1]?.input.apiKey).toBe("cursor-b");
+  expect(ctx.sdk.agents[1]?.runs[0]?.capturedToolResults).toEqual(["sunny"]);
 });
 
 test("completed follow-up after restart stays on its original account", async () => {

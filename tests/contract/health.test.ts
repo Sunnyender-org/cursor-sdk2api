@@ -60,6 +60,9 @@ test("health reports runtime capability truth without account data", async () =>
     parallel_tools: true,
     agent_resume: true,
     pending_tool_restart_resume: false,
+    transcript_tool_recovery: true,
+    stale_auth_recovery: true,
+    managed_account_failover: true,
     streaming_impl: "sdk_onDelta",
     store_backend: "jsonl",
   });

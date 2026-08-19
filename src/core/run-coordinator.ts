@@ -4,6 +4,7 @@ import type { GatewayConfig } from "../config.js";
 import type { AuthContext } from "../auth/credentials.js";
 import { digestJson } from "../digest.js";
 import {
+  GatewayError,
   invalidRequest,
   sdkFailure,
   sessionConflict,
@@ -18,6 +19,7 @@ import { EventPump, type PumpBoundary } from "./event-pump.js";
 import { Session } from "./session.js";
 import { SessionRegistry } from "./session-registry.js";
 import { batchDigest, mapClientTools } from "./tool-bridge.js";
+import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
 import type { TurnWriter, TurnWriterFactory } from "./turn-writer.js";
 
@@ -76,6 +78,10 @@ export class RunCoordinator {
   private readonly pendingRecoveries = new Map<
     string,
     { digest: string; promise: Promise<{ session: Session; pump: EventPump }> }
+  >();
+  private readonly transcriptRecoveries = new Map<
+    string,
+    { expiresAt: number; promise: Promise<{ session: Session; pump: EventPump }> }
   >();
 
   constructor(private readonly deps: CoordinatorDeps) {}
@@ -233,31 +239,58 @@ export class RunCoordinator {
     }
 
     const lookup = this.deps.registry.lookupByToolIds(ids);
+    let routingError: GatewayError | undefined;
     if (lookup.mixed) {
-      throw sessionConflict("tool_use_id values belong to different sessions");
+      routingError = sessionConflict("tool_use_id values belong to different sessions");
+    } else if (lookup.session && lookup.missing.length > 0) {
+      routingError = invalidRequest(`unknown tool_use_id: ${lookup.missing.join(",")}`);
     }
-    if (!lookup.session) {
-      const recorded = this.deps.lineage?.findByToolIds(ids);
-      if (recorded) {
-        await this.resumePendingLineage(
-          req,
-          res,
-          auth,
-          parsed,
-          results,
-          recorded,
-          requestId,
-          writerFactory,
-        );
+    if (!lookup.mixed && lookup.session && lookup.missing.length === 0) {
+      try {
+        await this.continueLiveSession(req, res, auth, parsed, results, lookup.session, requestId, writerFactory);
         return;
+      } catch (error) {
+        if (!isTranscriptRecoverableRoutingError(error)) throw error;
+        routingError = error;
       }
     }
-    const session = this.deps.registry.requireLive(lookup.session, ids);
-    this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
-
-    if (lookup.missing.length > 0) {
-      throw invalidRequest(`unknown tool_use_id: ${lookup.missing.join(",")}`);
+    if (!lookup.mixed && !lookup.session) {
+      const recorded = this.deps.lineage?.findByToolIds(ids);
+      if (recorded) {
+        try {
+          await this.resumePendingLineage(
+            req,
+            res,
+            auth,
+            parsed,
+            results,
+            recorded,
+            requestId,
+            writerFactory,
+          );
+          return;
+        } catch (error) {
+          if (!isTranscriptRecoverableRoutingError(error)) throw error;
+          routingError = error;
+        }
+      }
     }
+    await this.recoverFromTranscript(req, res, auth, parsed, results, requestId, writerFactory, routingError);
+  }
+
+  private async continueLiveSession(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    results: ParsedToolResult[],
+    session: Session,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+  ): Promise<void> {
+    const ids = results.map((result) => result.toolUseId);
+    this.deps.registry.requireLive(session, ids);
+    this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
 
     const digest = batchDigest(results);
     if (session.lastResultDigest && session.lastResultDigest !== digest) {
@@ -307,6 +340,102 @@ export class RunCoordinator {
       );
     }
     await drive;
+  }
+
+  private async recoverFromTranscript(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    results: ParsedToolResult[],
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+    routingError?: GatewayError,
+  ): Promise<void> {
+    let recovery: ReturnType<typeof buildTranscriptRecovery>;
+    try {
+      recovery = buildTranscriptRecovery(parsed, results);
+    } catch (error) {
+      if (routingError) throw routingError;
+      throw error;
+    }
+    const now = this.deps.clock.now();
+    for (const [key, entry] of this.transcriptRecoveries) {
+      if (now >= entry.expiresAt) this.transcriptRecoveries.delete(key);
+    }
+    const key = `${auth.fingerprint}:${recovery.digest}`;
+    let entry = this.transcriptRecoveries.get(key);
+    if (!entry) {
+      const promise = this.openTranscriptRecovery(auth, parsed, results, recovery);
+      entry = {
+        expiresAt: now + this.deps.config.replayTtlMs,
+        promise,
+      };
+      this.transcriptRecoveries.set(key, entry);
+      void promise.catch(() => {
+        if (this.transcriptRecoveries.get(key)?.promise === promise) {
+          this.transcriptRecoveries.delete(key);
+        }
+      });
+    }
+    const { session, pump } = await entry.promise;
+    await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
+  }
+
+  private async openTranscriptRecovery(
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    results: ParsedToolResult[],
+    recovery: ReturnType<typeof buildTranscriptRecovery>,
+  ): Promise<{ session: Session; pump: EventPump }> {
+    const session = this.deps.registry.create({
+      credentialFingerprint: auth.fingerprint,
+      modelId: parsed.model,
+      modelParams: parsed.modelParams,
+    });
+    session.lastResultDigest = batchDigest(results);
+    const customTools = mapClientTools(
+      parsed.tools,
+      session,
+      this.deps.clock,
+      () => undefined,
+      recovery.completedResults,
+    );
+    const deltas = createDeltaBridge();
+    try {
+      const agent = await this.deps.sdk.createAgent({
+        apiKey: auth.cursorApiKey,
+        modelId: parsed.model,
+        modelParams: session.modelParams,
+        workspaceDir: this.deps.workspaceDir,
+        clientToolNames: parsed.tools.map((tool) => tool.name),
+        customTools,
+      });
+      session.agent = agent;
+      session.sdkAgentId = agent.agentId;
+      session.state = "running";
+      const run = await agent.send({
+        text: recovery.prompt,
+        images: parsed.images,
+        customTools,
+        onDelta: deltas.ingest,
+      });
+      session.run = run;
+      const pump = new EventPump(
+        session,
+        run,
+        this.deps.clock,
+        this.deps.config.toolBatchSettleMs,
+        this.deps.config.firstEventTimeoutMs,
+      );
+      session.pump = pump;
+      deltas.attach(pump);
+      pump.ingestEarly(session.earlyCalls.splice(0));
+      return { session, pump };
+    } catch (error) {
+      this.deps.registry.forget(session, "transcript_recovery_failed");
+      throw sdkFailure(error);
+    }
   }
 
   private async resumePendingLineage(
@@ -599,7 +728,8 @@ export class RunCoordinator {
       expiresAt: session.lastActivityAt + ttl,
     };
     // Digest only — never persist assistant/tool payloads. In-process
-    // duplicate-same still replays from memory; after restart it is session_lost.
+    // duplicate-same still replays from memory. A later self-contained retry
+    // uses transcript recovery instead of a persisted assistant response body.
     if (session.lastResultDigest) record.lastResultDigest = session.lastResultDigest;
     try {
       this.deps.lineage.put(record);
@@ -701,4 +831,12 @@ function recoveredToolResultPrompt(record: LineageRecord, results: ParsedToolRes
     "Do not repeat the completed tool calls. You may call other tools only if the task still requires them.",
     ...lines,
   ].join("\n");
+}
+
+function isTranscriptRecoverableRoutingError(error: unknown): error is GatewayError {
+  return error instanceof GatewayError && (
+    error.code === "cursor_session_lost" ||
+    error.code === "cursor_session_conflict" ||
+    error.code === "invalid_request"
+  );
 }

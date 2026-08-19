@@ -91,6 +91,29 @@ async function listManagedModels(accounts: StoredCursorAccount[], catalog: Model
   };
 }
 
+function managedPreSemanticFailureCanFailover(error: unknown): boolean {
+  if (!(error instanceof GatewayError)) return true;
+  if (
+    error.code === "authentication_error" ||
+    error.code === "forbidden" ||
+    error.code === "rate_limited" ||
+    error.code === "cursor_timeout" ||
+    error.code === "cursor_upstream_error"
+  ) {
+    return true;
+  }
+  return error.httpStatus >= 500;
+}
+
+function responseStarted(res: ServerResponse): boolean {
+  return res.headersSent || res.writableEnded || res.destroyed;
+}
+
+function staleCredentialSessionError(error: unknown): boolean {
+  if (!(error instanceof GatewayError) || error.code !== "authentication_error") return false;
+  return !/invalid|revoked|expired|disabled|unauthorized api key/i.test(error.message);
+}
+
 export function createApp(input: {
   config: GatewayConfig;
   sdk: SdkRuntime;
@@ -140,12 +163,18 @@ export function createApp(input: {
   const resolveManagedAuth = async (
     parsed?: ParsedMessages,
     sessionHint?: string,
+    excludedFingerprints: ReadonlySet<string> = new Set(),
   ): Promise<AuthContext> => {
     const boundFingerprint = parsed ? boundCredentialFingerprint(parsed, sessionHint) : undefined;
-    if (boundFingerprint) {
+    if (boundFingerprint && !excludedFingerprints.has(boundFingerprint)) {
       const bound = accounts.findByFingerprint(boundFingerprint);
-      if (!bound) throw sessionLost("The Cursor account bound to this session is no longer configured");
-      return managedAccountAuth(bound.apiKey);
+      if (bound) return managedAccountAuth(bound.apiKey);
+      // A self-contained tool continuation can cold-branch from its full
+      // transcript when the originally bound managed account was removed.
+      // Completed session follow-ups still require their original account.
+      if (!parsed?.continuation) {
+        throw sessionLost("The Cursor account bound to this session is no longer configured");
+      }
     }
 
     const configured = accounts.list();
@@ -173,6 +202,7 @@ export function createApp(input: {
 
     candidates = candidates.filter(
       (account) =>
+        !excludedFingerprints.has(managedAccountAuth(account.apiKey).fingerprint) &&
         registry.activeRunCountForCredential(managedAccountAuth(account.apiKey).fingerprint) <
         config.perCredentialActiveRuns,
     );
@@ -193,7 +223,70 @@ export function createApp(input: {
     client: ClientAuthorization,
     parsed?: ParsedMessages,
     sessionHint?: string,
-  ): Promise<AuthContext> => client.mode === "byok" ? client.auth : resolveManagedAuth(parsed, sessionHint);
+    excludedFingerprints: ReadonlySet<string> = new Set(),
+  ): Promise<AuthContext> => client.mode === "byok"
+    ? client.auth
+    : resolveManagedAuth(parsed, sessionHint, excludedFingerprints);
+  const credentialProbes = new Map<string, Promise<"valid" | "invalid" | "unavailable">>();
+  const probeCredential = (auth: AuthContext): Promise<"valid" | "invalid" | "unavailable"> => {
+    const existing = credentialProbes.get(auth.fingerprint);
+    if (existing) return existing;
+    const probe = sdk.probeCredential(auth.cursorApiKey);
+    credentialProbes.set(auth.fingerprint, probe);
+    void probe.finally(() => {
+      if (credentialProbes.get(auth.fingerprint) === probe) credentialProbes.delete(auth.fingerprint);
+    }).catch(() => undefined);
+    return probe;
+  };
+
+  const runWithProviderRecovery = async (
+    res: ServerResponse,
+    client: ClientAuthorization,
+    parsed: ParsedMessages,
+    sessionHint: string | undefined,
+    run: (auth: AuthContext) => Promise<void>,
+  ): Promise<void> => {
+    const first = await resolveAuth(client, parsed, sessionHint);
+    try {
+      await run(first);
+      return;
+    } catch (initialError) {
+      let error = initialError;
+      if (!responseStarted(res) && staleCredentialSessionError(error)) {
+        const probe = await probeCredential(first);
+        if (probe === "valid") {
+          logger.warn(
+            { model: parsed.model, error_type: "authentication_error" },
+            "retrying pre-semantic Cursor request after credential probe",
+          );
+          try {
+            await run(first);
+            return;
+          } catch (retryError) {
+            error = retryError;
+          }
+        }
+      }
+      if (
+        client.mode !== "managed" ||
+        responseStarted(res) ||
+        !managedPreSemanticFailureCanFailover(error)
+      ) {
+        throw error;
+      }
+      let alternate: AuthContext;
+      try {
+        alternate = await resolveAuth(client, parsed, sessionHint, new Set([first.fingerprint]));
+      } catch {
+        throw error;
+      }
+      logger.warn(
+        { model: parsed.model, error_type: error instanceof GatewayError ? error.code : "cursor_upstream_error" },
+        "retrying pre-semantic Cursor request on another managed account",
+      );
+      await run(alternate);
+    }
+  };
   let shuttingDown = false;
   const sweepTimer = setInterval(() => {
     try {
@@ -437,8 +530,8 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const parsed = parseMessagesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        const auth = await resolveAuth(client, parsed, sessionHint);
-        await coordinator.handleMessages(req, res, auth, parsed, requestId, sessionHint);
+        await runWithProviderRecovery(res, client, parsed, sessionHint, (auth) =>
+          coordinator.handleMessages(req, res, auth, parsed, requestId, sessionHint));
         return;
       }
 
@@ -448,16 +541,16 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const chat = parseChatCompletionsRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        const auth = await resolveAuth(client, chat.parsed, sessionHint);
-        await coordinator.handleMessages(
-          req,
-          res,
-          auth,
-          chat.parsed,
-          requestId,
-          sessionHint,
-          createChatWriterFactory({ includeUsage: chat.includeUsage }),
-        );
+        await runWithProviderRecovery(res, client, chat.parsed, sessionHint, (auth) =>
+          coordinator.handleMessages(
+            req,
+            res,
+            auth,
+            chat.parsed,
+            requestId,
+            sessionHint,
+            createChatWriterFactory({ includeUsage: chat.includeUsage }),
+          ));
         return;
       }
 
@@ -467,16 +560,16 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const responses = parseResponsesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        const auth = await resolveAuth(client, responses.parsed, sessionHint);
-        await coordinator.handleMessages(
-          req,
-          res,
-          auth,
-          responses.parsed,
-          requestId,
-          sessionHint,
-          createResponsesWriterFactory(),
-        );
+        await runWithProviderRecovery(res, client, responses.parsed, sessionHint, (auth) =>
+          coordinator.handleMessages(
+            req,
+            res,
+            auth,
+            responses.parsed,
+            requestId,
+            sessionHint,
+            createResponsesWriterFactory(),
+          ));
         return;
       }
 

@@ -48,6 +48,10 @@ SDK Agent history lives in credential-partitioned `$STATE_DIR/sdk-store/<fingerp
 
 Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. Pending callback Promises are not serialized; the lineage stores only tool ids and names. After owner death, an exact credential/model/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
 
+When no exact live or persisted owner can attach, tool continuation may cold-branch only from a self-contained transcript. The latest assistant tool batch must exactly match the submitted result ids and every call must exist in the request catalog. Historical completed calls are indexed by stable tool-name/input signature; if the recovered Harness requests one again, the gateway returns the recorded result internally rather than exposing the same side effect to the client twice. Identical recovery requests are singleflight and replayable for the normal replay TTL.
+
+Before any semantic response is emitted, a generic SDK authentication-session failure is checked with an official `Cursor.me` credential probe. A still-valid key receives one same-credential Agent rebuild; an invalid key fails immediately. Managed mode may then try one different compatible account for authentication, permission, rate-limit, timeout, or upstream failures. No retry occurs after response headers/deltas begin.
+
 ## Injection
 
 Production uses `createCursorRuntime({ stateDir })` and passes the matching credential-partitioned `JsonlLocalAgentStore` and workspace to every `Agent.create` and `Agent.resume`. Tests inject `FakeSdk`. The HTTP layer never imports `@cursor/sdk` directly except through that adapter.

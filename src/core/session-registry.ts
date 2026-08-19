@@ -116,8 +116,8 @@ export class SessionRegistry {
 
   forget(session: Session, reason: string): void {
     // In-memory only. Completed lineage files stay until their own TTL so a
-    // later process can Agent.resume. Pending records also stay until TTL so
-    // a restart tool_result is deterministically session_lost.
+    // later process can Agent.resume. Pending records also stay until TTL for
+    // exact persisted recovery; a complete transcript may cold-branch later.
     const expireAt = this.clock.now() + this.limits.replayTtlMs;
     for (const [id, ownerSessionId] of this.toolIndex) {
       if (ownerSessionId !== session.sessionId) continue;

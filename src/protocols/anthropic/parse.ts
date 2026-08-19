@@ -288,7 +288,10 @@ export function stringifyToolResult(content: unknown): string {
   }
 }
 
-export function renderPrompt(parsed: ParsedMessages): { text: string; images: Array<{ data: string; mimeType: string }> } {
+export function renderPrompt(
+  parsed: ParsedMessages,
+  options: { includeContinuation?: boolean } = {},
+): { text: string; images: Array<{ data: string; mimeType: string }> } {
   const parts: string[] = [];
   if (parsed.tools.length > 0) {
     parts.push(
@@ -301,7 +304,9 @@ export function renderPrompt(parsed: ParsedMessages): { text: string; images: Ar
     );
   }
   if (parsed.systemText) parts.push(`System:\n${parsed.systemText}`);
-  const messages = parsed.continuation ? parsed.messages.slice(0, -1) : parsed.messages;
+  const messages = parsed.continuation && !options.includeContinuation
+    ? parsed.messages.slice(0, -1)
+    : parsed.messages;
   for (const message of messages) {
     const text = asBlocks(message.content)
       .map((block) => {

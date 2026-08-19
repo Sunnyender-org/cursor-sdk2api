@@ -36,6 +36,32 @@ test("SDK create authentication failures map to 401 and release capacity", async
   expect(res.status).toBe(401);
   expect(body.error.type).toBe("authentication_error");
   expect(ctx.app.registry.activeCount()).toBe(0);
+  expect(ctx.sdk.credentialProbeCalls).toHaveLength(0);
+});
+
+test("stale SDK authentication retries once after the official credential probe succeeds", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      createErrorsByApiKey: {
+        "test-key-a": [{ name: "AuthenticationError", message: "authentication error" }],
+      },
+      credentialProbeByApiKey: { "test-key-a": "valid" },
+      scripts: [[{ type: "text", chunks: ["reauthenticated"] }]],
+    },
+  });
+  const response = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "reauthenticated")).toBe(true);
+  expect(ctx.sdk.createCalls).toHaveLength(2);
+  expect(ctx.sdk.credentialProbeCalls).toEqual(["test-key-a"]);
 });
 
 test("completed follow-up send failure releases the active-run slot", async () => {

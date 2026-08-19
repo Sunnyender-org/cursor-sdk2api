@@ -342,6 +342,15 @@ export function createCursorRuntime(options: { stateDir: string }): SdkRuntime {
         };
       }
     },
+    async probeCredential(apiKey: string): Promise<"valid" | "invalid" | "unavailable"> {
+      try {
+        await Cursor.me({ apiKey });
+        return "valid";
+      } catch (error) {
+        const mapped = sdkFailure(error);
+        return mapped.code === "authentication_error" ? "invalid" : "unavailable";
+      }
+    },
   };
 }
 

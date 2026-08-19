@@ -30,7 +30,8 @@
 - **Claude 1M mode:** when Cursor's live catalog exposes `context=1m`, including on Sonnet 4.6 and Fable 5, the official SDK parameter is forwarded unchanged.
 - **Native client tools:** filesystem, shell, web, and network tools stay in Claude Code, Grok, or Codex and run in your local workspace.
 - **One tool engine:** all three protocols share the same Cursor SDK run, parallel-tool, continuation, replay, and session coordinator.
-- **One gateway key, many accounts:** persistent Cursor account pool, model-aware round-robin, session-sticky continuation, Dashboard quota, web console, and Docker.
+- **One gateway key, many accounts:** persistent Cursor account pool, model-aware round-robin, stale SDK-auth recovery, pre-semantic account failover, Dashboard quota, web console, and Docker.
+- **Cold continuation recovery:** a complete client transcript can rebuild an expired or moved tool turn while replaying already-completed tools locally instead of executing their side effects twice.
 - **new-api integrated:** ready-made external deployment, channel templates, compose E2E, and acceptance smoke. [Open the new-api guide](docs/NEW_API_INTEGRATION.md).
 
 > Cursor-routed Grok does not provide xAI-native `x_search`. Client-owned web and network tools still work as normal function tools.
@@ -116,13 +117,13 @@ Client tools are converted to SDK `local.customTools` through MCP. The model cho
 - `/health`: capabilities, SDK version, and proxy transport mode
 - `STATE_DIR`: account, SDK store, and resume state
 
-Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin, while tool continuation and resume stay pinned to the original account. BYOK remains available for a trusted single-user sidecar.
+Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin. Continuations stay pinned when the original account is healthy; before semantic output, one alternate managed account may be tried. If the original account/session is gone, an exact full transcript can cold-branch safely. BYOK remains available for a trusted single-user sidecar.
 
 `v0.1` is a trusted single-process sidecar. The management account endpoint has no separate authentication. Imported Cursor keys are stored in owner-only state files and are never returned to the browser after import. The supplied compose files bind the console to loopback; authenticate and restrict `/console/` plus `/v0/management/*` at any Internet-facing proxy.
 
 ## Verification
 
-The deterministic suite contains 167 tests. The dated, redacted live receipt covers Sonnet 4.6, Fable 5, Composer 2.5, and Grok 4.6 xhigh: [live smoke evidence](docs/evidence/2026-08-15-live-smoke.md).
+The deterministic suite contains 189 tests. The latest redacted receipt proves persisted and full-transcript recovery on Sonnet 4.6 and Grok 4.6 xhigh: [recovery live smoke](docs/evidence/2026-08-19-beefapi-sync-live-smoke.md). The earlier four-model receipt also covers Fable 5 and Composer 2.5: [four-model evidence](docs/evidence/2026-08-15-live-smoke.md).
 
 ```bash
 npm run typecheck

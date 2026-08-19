@@ -182,6 +182,7 @@ async function runModelMatrix(
   out.push(await isolate(ctx, model, "multi_round", () => runMultiRound(ctx, model)));
   out.push(await isolate(ctx, model, "duplicate_same", () => runDuplicateSame(ctx, model)));
   out.push(await isolate(ctx, model, "pending_restart_resume", () => runPendingRestart(ctx, model)));
+  out.push(await isolate(ctx, model, "transcript_cold_recovery", () => runTranscriptColdRecovery(ctx, model)));
   out.push(await isolate(ctx, model, "completed_resume", () => runCompletedResume(ctx, model)));
   if (model.toLowerCase().includes("fable")) {
     out.push(await isolate(ctx, model, "claude_code_shape", () => runClaudeCodeShape(ctx, model)));
@@ -578,6 +579,72 @@ async function runPendingRestart(ctx: RunContext, model: string): Promise<SmokeC
   }
   return passCase(model, "pending_restart_resume", resumed, {
     duration_ms: opened.duration_ms + resumed.duration_ms,
+  });
+}
+
+async function runTranscriptColdRecovery(ctx: RunContext, model: string): Promise<SmokeCase> {
+  if (!ctx.child) {
+    return {
+      id: `${model}/transcript_cold_recovery`,
+      model,
+      case: "transcript_cold_recovery",
+      status: "not_run",
+      required: true,
+      reason: "attach_mode_no_process_control",
+    };
+  }
+  const promptMarker = opaqueMarker("cold-call");
+  const userPrompt = `Call live_alpha once with token ${promptMarker}. Do not answer in text first.`;
+  const opened = await postMessages({
+    baseUrl: ctx.baseUrl,
+    apiKey: ctx.apiKey,
+    timeoutMs: ctx.timeoutMs,
+    body: {
+      model,
+      max_tokens: 256,
+      tools: liveTools(),
+      messages: [{ role: "user", content: userPrompt }],
+    },
+  });
+  const raw = opened.raw as { content?: Array<Record<string, unknown>> };
+  const call = raw.content?.find((block) => block.type === "tool_use");
+  if (opened.status !== 200 || !call || typeof call.id !== "string" || typeof call.name !== "string") {
+    return failCase(model, "transcript_cold_recovery", { ...opened, reason: "no_tool_use" });
+  }
+  await ctx.child.restartWithoutLineage();
+  ctx.baseUrl = ctx.child.baseUrl;
+  const marker = opaqueMarker("cold-result");
+  const recovered = await postMessages({
+    baseUrl: ctx.baseUrl,
+    apiKey: ctx.apiKey,
+    timeoutMs: ctx.timeoutMs,
+    marker,
+    body: {
+      model,
+      max_tokens: 128,
+      tools: liveTools(),
+      messages: [
+        { role: "user", content: userPrompt },
+        { role: "assistant", content: [call] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: call.id,
+            content: `The result is ${marker}. Reply with exactly ${marker}.`,
+          }],
+        },
+      ],
+    },
+  });
+  if (recovered.status !== 200 || recovered.error_type || !recovered.marker_hit) {
+    return failCase(model, "transcript_cold_recovery", {
+      ...recovered,
+      reason: recovered.marker_hit ? recovered.error_type : "cold_recovery_marker_missing",
+    });
+  }
+  return passCase(model, "transcript_cold_recovery", recovered, {
+    duration_ms: opened.duration_ms + recovered.duration_ms,
   });
 }
 

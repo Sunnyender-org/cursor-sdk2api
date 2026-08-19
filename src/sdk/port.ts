@@ -152,6 +152,7 @@ export interface SdkRuntime {
   resumeAgent(input: ResumeAgentInput): Promise<SdkAgent>;
   listModels(apiKey: string): Promise<SdkCatalogResult>;
   getAccount(apiKey: string): Promise<SdkAccountResult>;
+  probeCredential(apiKey: string): Promise<"valid" | "invalid" | "unavailable">;
 }
 
 export function apiProfileToolAllowlist(clientToolNames: string[]): string[] {

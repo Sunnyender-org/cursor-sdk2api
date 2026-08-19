@@ -40,6 +40,8 @@ export interface FakeSdkOptions {
   finalUsage?: SdkUsage;
   liveUsage?: SdkUsage;
   createError?: { message: string; name?: string };
+  createErrorsByApiKey?: Record<string, { message: string; name?: string } | Array<{ message: string; name?: string }>>;
+  credentialProbeByApiKey?: Record<string, "valid" | "invalid" | "unavailable">;
   resumeError?: { message: string; name?: string };
 }
 
@@ -291,6 +293,7 @@ export class FakeAgent implements SdkAgent {
 export class FakeSdk implements SdkRuntime {
   readonly sdkVersion: string;
   readonly agents: FakeAgent[] = [];
+  readonly createCalls: CreateAgentInput[] = [];
   lastCreate?: CreateAgentInput;
   lastResume?: ResumeAgentInput;
   resumeCalls: ResumeAgentInput[] = [];
@@ -303,6 +306,8 @@ export class FakeSdk implements SdkRuntime {
   getAccountCalls = 0;
   readonly getAccountApiKeys: string[] = [];
   private agentScriptIndex = 0;
+  private readonly keyedCreateErrorIndexes = new Map<string, number>();
+  readonly credentialProbeCalls: string[] = [];
 
   constructor(private readonly options: FakeSdkOptions = {}) {
     this.sdkVersion = options.sdkVersion ?? "1.0.28";
@@ -327,6 +332,15 @@ export class FakeSdk implements SdkRuntime {
   }
 
   async createAgent(input: CreateAgentInput): Promise<SdkAgent> {
+    this.createCalls.push(input);
+    const configured = this.options.createErrorsByApiKey?.[input.apiKey];
+    const keyedError = Array.isArray(configured)
+      ? configured[this.keyedCreateErrorIndexes.get(input.apiKey) ?? 0]
+      : configured;
+    if (Array.isArray(configured)) {
+      this.keyedCreateErrorIndexes.set(input.apiKey, (this.keyedCreateErrorIndexes.get(input.apiKey) ?? 0) + 1);
+    }
+    if (keyedError) throw configuredError(keyedError);
     if (this.options.createError) throw configuredError(this.options.createError);
     this.lastCreate = input;
     this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames);
@@ -366,5 +380,10 @@ export class FakeSdk implements SdkRuntime {
     this.getAccountCalls += 1;
     this.getAccountApiKeys.push(apiKey);
     return this.options.accountsByApiKey?.[apiKey] ?? this.account;
+  }
+
+  async probeCredential(apiKey: string): Promise<"valid" | "invalid" | "unavailable"> {
+    this.credentialProbeCalls.push(apiKey);
+    return this.options.credentialProbeByApiKey?.[apiKey] ?? "valid";
   }
 }

@@ -96,7 +96,7 @@ Completed follow-up with `x-cursor-session-id` can `Agent.resume` within the ses
 
 - BYOK: clients send a Cursor API key. Suitable for a trusted local sidecar.
 - Managed pool: set `AUTH_MODE=managed` and `GATEWAY_ACCESS_KEY`, then import one or more Cursor keys in `/console/`. `CURSOR_API_KEY` is optional and only seeds the persistent pool.
-- New sessions use model-aware round-robin across compatible accounts. Tool continuation, completed follow-up, and restart recovery stay bound to the original credential fingerprint.
+- New sessions use model-aware round-robin across compatible accounts. Tool continuation, completed follow-up, and exact persisted restart recovery stay bound to the original credential fingerprint. Before semantic output, managed mode may try one alternate compatible account. If the original account is removed, a self-contained tool transcript may cold-branch to another compatible account.
 
 BYOK credentials share the gateway process and capacity limits, but their official SDK stores and empty workspace directories are separated by credential fingerprint. This is process-local tenant isolation, not a claim of hardened hostile multi-tenant hosting; public Internet deployment still requires TLS, access controls, encrypted state, monitoring, and an explicit operator threat model.
 
@@ -109,10 +109,10 @@ In-process SDK Run handles and pending tool Promises cannot move to another proc
 3. Wait until active sessions reach zero or the drain deadline.
 4. Then replace the process. Completed lineage under `STATE_DIR` survives; pending tool turns do not.
 
-A load balancer that retries a pending continuation onto a new replica will see `409 cursor_session_lost`. That is the correct failure, not a successful empty turn.
+A replica without the original live handle first tries persisted lineage. If that is unavailable, it may cold-branch only from a complete transcript with an exact latest tool batch; otherwise it returns `409 cursor_session_lost` rather than an empty success.
 
 Completed follow-up after restart requires the same `STATE_DIR` volume, `x-cursor-session-id`, and the original account still present in the pool.
 
 ## Resource defaults
 
-Development defaults: 4 global active runs, 2 per credential, 30 minute awaiting TTL, 10 minute replay TTL, 60 minute run deadline.
+Development defaults: 4 global active runs, 2 per credential, 30 minute awaiting TTL, 10 minute replay TTL, 60 minute run deadline, and 40 seconds to the first SDK event.

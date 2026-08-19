@@ -26,6 +26,7 @@ Outer agents (Claude Code, Grok Build) execute their own local file tools in the
 | usage / cache | pass-through | Final-only cumulative; omit missing fields |
 | completed `x-cursor-session-id` follow-up | yes | Store + `Agent.resume` within TTL |
 | pending tool restart | yes | Exact credential/model/tool batch resumes with persisted SDK Agent lineage and `local.force=true` |
+| expired/moved tool continuation | yes | A complete transcript whose latest assistant tool batch exactly matches the submitted results can cold-branch to a new SDK Agent; recorded identical tools replay internally |
 | duplicate-same after restart | no | Digest only; no persisted assistant replay |
 | `/v1/models` | yes | BYOK returns one account catalog. Managed mode returns the union of exact catalog ids across the pool. |
 | `/v1/account` | yes | BYOK returns one account. Managed mode returns every pooled identity and real Cursor Dashboard period usage without exposing raw keys. |
@@ -54,11 +55,14 @@ The gateway does not implement OpenAI `previous_response_id` reconstruction, `st
 | Pending tool turn | Latest `input` items must be only `function_call_output`. Each `call_id` is the live `tool_use_id`. | `previous_response_id`, response `id`, output item `id` |
 | Same outputs again | Request/result digest replay. No second `resolve`. | A new Agent/Run |
 | Completed follow-up | `x-cursor-session-id` on a new `input` that is not a tool-output suffix, same credential/model/params | `previous_response_id` |
-| After process restart, still awaiting tools | Resume the persisted SDK Agent with the exact credential/model/tool-id batch and `local.force=true` | Missing catalog, mismatched identity, or a different result batch |
+| After process restart, still awaiting tools | Resume the persisted SDK Agent with the exact credential/model/tool-id batch and `local.force=true` | Missing catalog or an incomplete result batch |
+| SDK session/account no longer attachable | Cold-branch from the complete transcript and replay completed tool signatures internally | Missing assistant calls, missing catalog, or results that do not exactly match the latest tool batch |
 
 `function_call_output` mixed with a later user/message item is `422`. Missing required `call_id`s, unknown ids, and mixed-session ids fail closed the same way as Messages `tool_result`.
 
 Live catalog/text/tool/restart matrix is an opt-in runner (`npm run live:smoke`), not default CI. Catalog-missing required model names fail closed; they are not green skips. This file does not record live model results.
+
+Runtime discovery exposes `transcript_tool_recovery`, `stale_auth_recovery`, and `managed_account_failover` in `/health`. The last capability applies only to managed mode and only before an HTTP response has begun.
 
 ## Error types
 

@@ -11,6 +11,7 @@ export interface ChildGateway {
   stateDir: string;
   workspaceDir: string;
   restart(): Promise<void>;
+  restartWithoutLineage(): Promise<void>;
   stop(): Promise<void>;
   cleanup(): void;
 }
@@ -65,6 +66,19 @@ export async function startChildGateway(input: {
     workspaceDir,
     async restart() {
       await stopProcess(child);
+      port = await freeLoopbackPort();
+      child = spawnChild({
+        distEntry: input.distEntry,
+        repoRoot: input.repoRoot,
+        port,
+        stateDir,
+        workspaceDir,
+      });
+      await waitHealth(`http://127.0.0.1:${port}`, readyTimeoutMs, child, input.canaries);
+    },
+    async restartWithoutLineage() {
+      await stopProcess(child);
+      rmSync(join(stateDir, "lineage"), { recursive: true, force: true });
       port = await freeLoopbackPort();
       child = spawnChild({
         distEntry: input.distEntry,
