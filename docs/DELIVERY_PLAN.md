@@ -154,7 +154,7 @@ Health returns at least:
 {
   "status": "ok",
   "service": "cursor-sdk2api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sdk_version": "1.0.x",
   "runtime": "local",
   "capabilities": {
