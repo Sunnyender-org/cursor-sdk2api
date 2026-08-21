@@ -7,7 +7,11 @@ One live SDK Run has one owner process and one event-pump consumer.
 ```
 HTTP /v1/messages | /v1/chat/completions | /v1/responses
   -> protocol parse (Chat/Responses convert to canonical ParsedMessages)
+  -> CursorAgentTurn (protocol-neutral ordinary-turn IR)
   -> RunCoordinator
+       -> tool_result: existing ATTACH / lineage resume / transcript recovery
+       -> exact successor: Agent.resume/send(current turn text+images only)
+       -> unknown/fork/compact: cold rebuild with full transcript fallback
        -> SessionRegistry (fingerprint, model, tool_use_id, TTL)
        -> ToolBridge (request tools -> local.customTools)
        -> EventPump (single run.stream() consumer for tool/status/terminal)
@@ -46,7 +50,9 @@ Pending calls live in a `Map<toolUseId, PendingCall>`. There is no single-pendin
 
 SDK Agent history lives in credential-partitioned `$STATE_DIR/sdk-store/<fingerprint>` directories via the official `JsonlLocalAgentStore`. Each credential also receives a private empty-workspace partition. Gateway lineage (`$STATE_DIR/lineage`) keeps only resume metadata: session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids, optional result digest, and timestamps.
 
-Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. Pending callback Promises are not serialized; the lineage stores only tool ids and names. After owner death, an exact credential/model/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
+Ordinary multi-turn requests without `x-cursor-session-id` use a credential-free journal of digests (`STATE_DIR/ordinary-turns.json`). Exact linear successors reuse the same Agent and `send()` only the latest user text/images. Forks, compact/missing anchors, model/effort/tool-catalog mismatches, and credential rotation cold-rebuild. Identical request digests replay in-process; after a process restart they fail closed because assistant bodies are not persisted.
+
+Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. `ORDINARY_TURN_COORDINATOR=0` restores the previous flatten-every-turn path. Pending callback Promises are not serialized; the lineage stores only tool ids and names. After owner death, an exact credential/model/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
 
 When no exact live or persisted owner can attach, tool continuation may cold-branch only from a self-contained transcript. The latest assistant tool batch must exactly match the submitted result ids and every call must exist in the request catalog. Historical completed calls are indexed by stable tool-name/input signature; if the recovered Harness requests one again, the gateway returns the recorded result internally rather than exposing the same side effect to the client twice. Identical recovery requests are singleflight and replayable for the normal replay TTL.
 

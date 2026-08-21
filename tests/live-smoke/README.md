@@ -11,6 +11,7 @@ npm run build
 export CURSOR_LIVE_SMOKE=1
 export CURSOR_API_KEY=...   # do not commit; do not paste into chat
 npm run live:smoke
+npm run live:ordinary   # exact-lineage ordinary follow-up only
 ```
 
 Optional:

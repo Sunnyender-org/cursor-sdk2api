@@ -1,6 +1,6 @@
 {
   "name": "cursor-sdk2api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Independent MIT gateway that exposes official @cursor/sdk as Anthropic- and OpenAI-compatible HTTP APIs.",
   "license": "MIT",
   "type": "module",
@@ -36,6 +36,7 @@
     "dev:web": "vite --config web/vite.config.ts",
     "lint": "npm run typecheck",
     "live:smoke": "tsx tests/live-smoke/run.ts",
+    "live:ordinary": "tsx tests/live-smoke/ordinary-turn-live.ts",
     "new-api:smoke": "node integrations/new-api/smoke.mjs",
     "secret:scan": "bash tests/secret-scan.sh"
   },

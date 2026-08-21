@@ -29,7 +29,7 @@
 
 - **Claude 1M mode:** when Cursor's live catalog exposes `context=1m`, including on Sonnet 4.6 and Fable 5, the official SDK parameter is forwarded unchanged.
 - **Native client tools:** filesystem, shell, web, and network tools stay in Claude Code, Grok, or Codex and run in your local workspace.
-- **One tool engine:** all three protocols share the same Cursor SDK run, parallel-tool, continuation, replay, and session coordinator.
+- **One tool engine:** all three protocols share the same Cursor SDK run, parallel-tool, continuation, replay, and session coordinator. Ordinary follow-up with a complete transcript reuses one durable Agent and sends only the current user turn.
 - **One gateway key, many accounts:** persistent Cursor account pool, model-aware round-robin, stale SDK-auth recovery, pre-semantic account failover, Dashboard quota, web console, and Docker.
 - **Cold continuation recovery:** a complete client transcript can rebuild an expired or moved tool turn while replaying already-completed tools locally instead of executing their side effects twice.
 - **new-api integrated:** ready-made external deployment, channel templates, compose E2E, and acceptance smoke. [Open the new-api guide](docs/NEW_API_INTEGRATION.md).

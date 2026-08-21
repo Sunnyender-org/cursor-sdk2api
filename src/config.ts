@@ -23,6 +23,7 @@ export interface GatewayConfig {
   replayTtlMs: number;
   runDeadlineMs: number;
   firstEventTimeoutMs: number;
+  ordinaryTurnCoordinator: boolean;
   toolBatchSettleMs: number;
   catalogCacheMs: number;
   sweepIntervalMs: number;
@@ -53,6 +54,7 @@ export interface RuntimeCapabilities {
   transcript_tool_recovery?: boolean;
   stale_auth_recovery?: boolean;
   managed_account_failover?: boolean;
+  ordinary_turn_coordinator?: boolean;
   streaming_impl?: "sdk_onDelta";
   store_backend?: "jsonl";
 }
@@ -73,9 +75,19 @@ export const DEFAULT_CAPABILITIES: RuntimeCapabilities = {
   transcript_tool_recovery: true,
   stale_auth_recovery: true,
   managed_account_failover: true,
+  ordinary_turn_coordinator: true,
   streaming_impl: "sdk_onDelta",
   store_backend: "jsonl",
 };
+
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const value = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  throw new Error(`Environment variable ${name} must be a boolean`);
+}
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -115,6 +127,10 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     replayTtlMs: envInt("REPLAY_TTL_MS", 10 * 60_000),
     runDeadlineMs: envInt("RUN_DEADLINE_MS", 60 * 60_000),
     firstEventTimeoutMs: envInt("FIRST_EVENT_TIMEOUT_MS", 40_000),
+    ordinaryTurnCoordinator: envBool(
+      "ORDINARY_TURN_COORDINATOR",
+      envBool("CURSOR_AGENT_TURN_COORDINATOR", true),
+    ),
     toolBatchSettleMs: envInt("TOOL_BATCH_SETTLE_MS", 1_500),
     catalogCacheMs: envInt("CATALOG_CACHE_MS", 5 * 60_000),
     sweepIntervalMs: envInt("SWEEP_INTERVAL_MS", 5_000),
@@ -138,5 +154,13 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     }
   }
 
-  return { ...config, ...overrides, capabilities: { ...config.capabilities, ...overrides.capabilities } };
+  const merged = { ...config, ...overrides };
+  return {
+    ...merged,
+    capabilities: {
+      ...config.capabilities,
+      ordinary_turn_coordinator: merged.ordinaryTurnCoordinator,
+      ...overrides.capabilities,
+    },
+  };
 }

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { CursorAccountPool } from "../auth/account-pool.js";
 import {
   authorizeClient,
@@ -13,6 +14,7 @@ import type { GatewayConfig } from "../config.js";
 import { RunCoordinator } from "../core/run-coordinator.js";
 import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
+import { OrdinaryTurnJournal } from "../core/ordinary-turn-journal.js";
 import { SessionRegistry } from "../core/session-registry.js";
 import {
   forbiddenError,
@@ -48,6 +50,7 @@ export interface App {
   coordinator: RunCoordinator;
   catalog: ModelCatalog;
   lineage: LineageStore;
+  ordinaryJournal: OrdinaryTurnJournal;
   accounts: CursorAccountFileStore;
   sdk: SdkRuntime;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -132,6 +135,9 @@ export function createApp(input: {
     runDeadlineMs: config.runDeadlineMs,
   });
   const lineage = new LineageStore(config.stateDir, clock);
+  const ordinaryJournal = new OrdinaryTurnJournal(join(config.stateDir, "ordinary-turns.json"), {
+    now: () => clock.now(),
+  });
   const coordinator = new RunCoordinator({
     config,
     sdk,
@@ -140,6 +146,7 @@ export function createApp(input: {
     logger,
     workspaceDir,
     lineage,
+    ordinaryJournal,
     beforeApplyBoundary,
   });
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
@@ -292,6 +299,7 @@ export function createApp(input: {
     try {
       registry.sweep();
       lineage.sweep();
+      ordinaryJournal.sweepExpired();
     } catch {
       // sweep must not crash the process
     }
@@ -335,6 +343,7 @@ export function createApp(input: {
               ...config.capabilities,
               agent_resume: config.capabilities.agent_resume,
               pending_tool_restart_resume: config.capabilities.pending_tool_restart_resume,
+              ordinary_turn_coordinator: config.ordinaryTurnCoordinator,
               store_backend: config.capabilities.store_backend ?? "jsonl",
             },
             verification: {
@@ -605,6 +614,7 @@ export function createApp(input: {
     coordinator,
     catalog,
     lineage,
+    ordinaryJournal,
     accounts,
     sdk,
     handler,

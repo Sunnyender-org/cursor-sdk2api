@@ -155,6 +155,9 @@ export class SessionRegistry {
         session.replay &&
         now - session.replay.createdAt > this.limits.replayTtlMs
       ) {
+        if (session.retainOrdinaryAgent && now < session.retainUntil) {
+          continue;
+        }
         this.forget(session, "replay_ttl");
       }
     }

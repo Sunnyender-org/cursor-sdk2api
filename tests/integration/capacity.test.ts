@@ -32,11 +32,14 @@ function textBody(content: string, extra: Record<string, unknown> = {}) {
   });
 }
 
+let sessionSeq = 0;
+
 async function completeSession(ctx: TestContext, apiKey = "test-key-a"): Promise<string> {
+  sessionSeq += 1;
   const res = await api(ctx, "/v1/messages", {
     apiKey,
     method: "POST",
-    body: textBody("hi"),
+    body: textBody(`hi-${sessionSeq}`),
   });
   expect(res.status).toBe(200);
   return ((await res.json()) as { cursor_session_id: string }).cursor_session_id;

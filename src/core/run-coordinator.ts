@@ -1,3 +1,5 @@
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Clock } from "../clock.js";
 import type { GatewayConfig } from "../config.js";
@@ -15,7 +17,18 @@ import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/ty
 import { renderPrompt } from "../protocols/anthropic/parse.js";
 import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
 import type { SdkDeltaUpdate, SdkRuntime } from "../sdk/port.js";
+import {
+  currentTurnSendPayload,
+  cursorAgentTurnFromParsed,
+  cursorAgentTurnLineageKey,
+  digestAssistantAnchor,
+  nextCursorAgentTurnLineageKey,
+  ordinaryReplayKey,
+  type CursorAgentTurn,
+} from "./cursor-agent-turn.js";
 import { EventPump, type PumpBoundary } from "./event-pump.js";
+import { decideOrdinaryTurn } from "./ordinary-turn.js";
+import type { OrdinaryTurnJournal, OrdinaryTurnRecord } from "./ordinary-turn-journal.js";
 import { Session } from "./session.js";
 import { SessionRegistry } from "./session-registry.js";
 import { batchDigest, mapClientTools } from "./tool-bridge.js";
@@ -31,6 +44,7 @@ export interface CoordinatorDeps {
   logger: Logger;
   workspaceDir: string;
   lineage?: LineageStore;
+  ordinaryJournal?: OrdinaryTurnJournal;
   /** Test-only gate between waitForBoundary and state transition. */
   beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
 }
@@ -83,8 +97,15 @@ export class RunCoordinator {
     string,
     { expiresAt: number; promise: Promise<{ session: Session; pump: EventPump }> }
   >();
+  private readonly ordinaryInflight = new Map<string, Promise<void>>();
+  private readonly ordinaryReplay = new Map<string, { session: Session; expiresAt: number }>();
 
-  constructor(private readonly deps: CoordinatorDeps) {}
+  constructor(private readonly deps: CoordinatorDeps) {
+    this.deps.ordinaryJournal?.setOnExpire((record) => {
+      const session = this.findSessionByAgentId(record.agentId);
+      if (session) this.deps.registry.forget(session, "ordinary_turn_expired");
+    });
+  }
 
   async handleMessages(
     req: IncomingMessage,
@@ -96,9 +117,24 @@ export class RunCoordinator {
     writerFactory: TurnWriterFactory = createAnthropicWriter,
   ): Promise<void> {
     this.deps.registry.sweep();
+    this.deps.ordinaryJournal?.sweepExpired();
     if (parsed.continuation) {
       await this.continueTurn(req, res, auth, parsed, parsed.continuation, requestId, writerFactory);
       return;
+    }
+    const turn = cursorAgentTurnFromParsed(parsed, { tenantScope: auth.fingerprint });
+    if (this.deps.config.ordinaryTurnCoordinator && this.deps.ordinaryJournal) {
+      const handled = await this.handleOrdinaryTurn(
+        req,
+        res,
+        auth,
+        parsed,
+        turn,
+        requestId,
+        writerFactory,
+        sessionHint,
+      );
+      if (handled) return;
     }
     if (sessionHint) {
       const existing = this.deps.registry.get(sessionHint);
@@ -109,7 +145,367 @@ export class RunCoordinator {
       await this.resumeCompletedLineage(req, res, auth, parsed, sessionHint, requestId, writerFactory);
       return;
     }
-    await this.startTurn(req, res, auth, parsed, requestId, writerFactory);
+    await this.startTurn(
+      req,
+      res,
+      auth,
+      parsed,
+      requestId,
+      writerFactory,
+      this.deps.config.ordinaryTurnCoordinator ? turn : undefined,
+    );
+  }
+
+  private async handleOrdinaryTurn(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    turn: CursorAgentTurn,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+    sessionHint?: string,
+  ): Promise<boolean> {
+    const journal = this.deps.ordinaryJournal;
+    if (!journal) return false;
+    const key = ordinaryReplayKey(turn);
+    const inflight = this.ordinaryInflight.get(key);
+    if (inflight) {
+      await inflight;
+      const cached = this.ordinaryReplay.get(key);
+      if (!cached?.session.replay) {
+        throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
+      }
+      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      return true;
+    }
+
+    const decision = decideOrdinaryTurn({
+      turn,
+      journal,
+      inflight: new Set(this.ordinaryInflight.keys()),
+      now: this.deps.clock.now(),
+      enabled: true,
+      hasReplay: this.ordinaryReplay.has(key),
+    });
+
+    if (decision.action === "tool_continuation") return false;
+    if (decision.action === "replay") {
+      const cached = this.ordinaryReplay.get(key);
+      if (!cached?.session.replay) {
+        throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
+      }
+      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      return true;
+    }
+    if (decision.action === "fail_closed") {
+      throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
+    }
+    if (decision.action === "singleflight") {
+      const pending = this.ordinaryInflight.get(key);
+      if (pending) {
+        await pending;
+        const cached = this.ordinaryReplay.get(key);
+        if (!cached?.session.replay) {
+          throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
+        }
+        this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+        return true;
+      }
+    }
+    if (decision.action === "rebuild" && sessionHint) {
+      return false;
+    }
+
+    if (decision.action === "resume") {
+      await this.claimOrdinaryTurn(req, res, auth, parsed, turn, requestId, writerFactory, {
+        mode: "resume",
+        parent: decision.record,
+      });
+      return true;
+    }
+
+    await this.claimOrdinaryTurn(req, res, auth, parsed, turn, requestId, writerFactory, {
+      mode: "rebuild",
+      reason: decision.action === "rebuild" ? decision.reason : "unknown_or_first",
+    });
+    return true;
+  }
+
+  private async claimOrdinaryTurn(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    turn: CursorAgentTurn,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+    claim: { mode: "resume"; parent: OrdinaryTurnRecord } | { mode: "rebuild"; reason: string },
+  ): Promise<void> {
+    const journal = this.deps.ordinaryJournal;
+    if (!journal) {
+      await this.startTurn(req, res, auth, parsed, requestId, writerFactory, turn);
+      return;
+    }
+    const lineageKey = cursorAgentTurnLineageKey(turn);
+    const key = ordinaryReplayKey(turn);
+    const existing = this.ordinaryInflight.get(key);
+    if (existing) {
+      await existing;
+      const cached = this.ordinaryReplay.get(key);
+      if (!cached?.session.replay) {
+        throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
+      }
+      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      return;
+    }
+
+    let resolveInflight!: () => void;
+    let rejectInflight!: (error: unknown) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveInflight = resolve;
+      rejectInflight = reject;
+    });
+    this.ordinaryInflight.set(key, promise);
+    void promise.catch(() => undefined);
+
+    const claimedAt = this.deps.clock.now();
+    const runningRecord: OrdinaryTurnRecord = {
+      lineageKey,
+      requestDigest: turn.lineage.requestDigest,
+      nextLineageKey: "",
+      tenantScope: turn.tenantScope,
+      route: turn.route,
+      channelId: turn.channelId,
+      effectiveModel: turn.effectiveModel,
+      parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
+      turnIndex: turn.lineage.turnIndex,
+      toolCatalogDigest: turn.lineage.toolCatalogDigest,
+      assistantAnchor: "",
+      agentId: claim.mode === "resume" ? claim.parent.agentId : "",
+      credentialFingerprint: auth.fingerprint,
+      state: "running",
+      createdAt: claimedAt,
+      updatedAt: claimedAt,
+      expiresAt: claimedAt + this.deps.config.sessionTtlMs,
+    };
+    journal.upsert(runningRecord);
+
+    try {
+      await this.executeOrdinaryClaim(
+        req,
+        res,
+        auth,
+        parsed,
+        turn,
+        requestId,
+        writerFactory,
+        claim,
+      );
+      resolveInflight();
+    } catch (error) {
+      journal.remove(lineageKey, turn.lineage.requestDigest);
+      rejectInflight(error);
+      throw error;
+    } finally {
+      this.ordinaryInflight.delete(key);
+    }
+  }
+
+  private async executeOrdinaryClaim(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    turn: CursorAgentTurn,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+    claim: { mode: "resume"; parent: OrdinaryTurnRecord } | { mode: "rebuild"; reason: string },
+  ): Promise<void> {
+    let resume = claim.mode === "resume";
+    if (resume && claim.mode === "resume") {
+      const live = this.findSessionByAgentId(claim.parent.agentId);
+      if (
+        live?.agent &&
+        live.state === "completed" &&
+        live.credentialFingerprint === auth.fingerprint &&
+        live.modelId === parsed.model &&
+        claim.parent.credentialFingerprint === auth.fingerprint
+      ) {
+        live.ordinaryTurn = turn;
+        this.traceOrdinary({
+          action: "resume",
+          reason: "exact_successor_live",
+          model: parsed.model,
+          send_chars: currentTurnSendPayload(turn).text.length,
+        });
+        await this.followUp(
+          req,
+          res,
+          auth,
+          parsed,
+          live,
+          requestId,
+          writerFactory,
+          currentTurnSendPayload(turn),
+        );
+        return;
+      }
+      if (live?.agent && live.credentialFingerprint !== auth.fingerprint) {
+        resume = false;
+      } else if (
+        claim.parent.agentId &&
+        claim.parent.credentialFingerprint === auth.fingerprint
+      ) {
+        await this.resumeOrdinaryAgent(
+          req,
+          res,
+          auth,
+          parsed,
+          turn,
+          claim.parent,
+          requestId,
+          writerFactory,
+        );
+        return;
+      } else {
+        resume = false;
+      }
+    }
+
+    const rebuildReason = claim.mode === "rebuild" ? claim.reason : "resume_fallback";
+    this.traceOrdinary({
+      action: "rebuild",
+      reason: rebuildReason,
+      model: parsed.model,
+      send_chars: renderPrompt(parsed).text.length,
+    });
+    await this.startTurn(req, res, auth, parsed, requestId, writerFactory, turn);
+  }
+
+  private async resumeOrdinaryAgent(
+    req: IncomingMessage,
+    res: ServerResponse,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+    turn: CursorAgentTurn,
+    parent: OrdinaryTurnRecord,
+    requestId: string,
+    writerFactory: TurnWriterFactory,
+  ): Promise<void> {
+    this.deps.registry.assertCanActivateRun({
+      credentialFingerprint: auth.fingerprint,
+    });
+    const session = this.deps.registry.create({
+      credentialFingerprint: auth.fingerprint,
+      modelId: parsed.model,
+      modelParams: parsed.modelParams,
+    });
+    session.ordinaryTurn = turn;
+    try {
+      const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
+      const agent = await this.deps.sdk.resumeAgent({
+        agentId: parent.agentId,
+        apiKey: auth.cursorApiKey,
+        modelId: parsed.model,
+        modelParams: session.modelParams,
+        workspaceDir: this.deps.workspaceDir,
+        clientToolNames: parsed.tools.map((tool) => tool.name),
+        customTools,
+      });
+      session.agent = agent;
+      session.sdkAgentId = parent.agentId;
+      this.traceOrdinary({
+        action: "resume",
+        reason: "exact_successor_store",
+        model: parsed.model,
+        send_chars: currentTurnSendPayload(turn).text.length,
+      });
+      await this.followUp(
+        req,
+        res,
+        auth,
+        parsed,
+        session,
+        requestId,
+        writerFactory,
+        currentTurnSendPayload(turn),
+      );
+    } catch (error) {
+      if (!res.headersSent) this.deps.registry.forget(session, "ordinary_resume_failed");
+      throw sdkFailure(error);
+    }
+  }
+
+  private traceOrdinary(event: {
+    action: "resume" | "rebuild";
+    reason: string;
+    model: string;
+    send_chars: number;
+  }): void {
+    this.deps.logger.info(
+      {
+        model: event.model,
+        action: event.action,
+        reason: event.reason,
+        send_chars: event.send_chars,
+      },
+      "ordinary turn",
+    );
+    try {
+      appendFileSync(
+        join(this.deps.config.stateDir, "ordinary-trace.jsonl"),
+        `${JSON.stringify({ t: this.deps.clock.now(), ...event })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch {
+      // diagnostic only
+    }
+  }
+
+  private findSessionByAgentId(agentId: string): Session | undefined {
+    if (!agentId) return undefined;
+    for (const session of this.deps.registry.sessions.values()) {
+      if (session.sdkAgentId === agentId || session.agent?.agentId === agentId) return session;
+    }
+    return undefined;
+  }
+
+  private rememberOrdinaryCompletion(session: Session): void {
+    const turn = session.ordinaryTurn;
+    const journal = this.deps.ordinaryJournal;
+    if (!turn || !journal || !session.replay) return;
+    if (session.state !== "completed" && session.state !== "awaiting_tool_results") return;
+    const assistantAnchor = digestAssistantAnchor(session.replay.turn.blocks);
+    const now = this.deps.clock.now();
+    const completed: OrdinaryTurnRecord = {
+      lineageKey: cursorAgentTurnLineageKey(turn),
+      requestDigest: turn.lineage.requestDigest,
+      nextLineageKey: nextCursorAgentTurnLineageKey(turn, assistantAnchor),
+      tenantScope: turn.tenantScope,
+      route: turn.route,
+      channelId: turn.channelId,
+      effectiveModel: turn.effectiveModel,
+      parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
+      turnIndex: turn.lineage.turnIndex,
+      toolCatalogDigest: turn.lineage.toolCatalogDigest,
+      assistantAnchor,
+      agentId: session.sdkAgentId ?? session.agent?.agentId ?? "",
+      credentialFingerprint: session.credentialFingerprint,
+      state: "completed",
+      createdAt: session.createdAt,
+      updatedAt: now,
+      expiresAt: now + this.deps.config.sessionTtlMs,
+    };
+    journal.upsert(completed);
+    this.ordinaryReplay.set(ordinaryReplayKey(turn), {
+      session,
+      expiresAt: completed.expiresAt,
+    });
+    if (session.state === "completed") {
+      session.retainOrdinaryAgent = true;
+      session.retainUntil = completed.expiresAt;
+    }
   }
 
   private async startTurn(
@@ -119,12 +515,15 @@ export class RunCoordinator {
     parsed: ParsedMessages,
     requestId: string,
     writerFactory: TurnWriterFactory,
+    ordinaryTurn?: CursorAgentTurn,
+    sendOverride?: { text: string; images: Array<{ data: string; mimeType: string }> },
   ): Promise<void> {
     const session = this.deps.registry.create({
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
     });
+    if (ordinaryTurn) session.ordinaryTurn = ordinaryTurn;
     const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
     try {
       const agent = await this.deps.sdk.createAgent({
@@ -138,7 +537,7 @@ export class RunCoordinator {
       session.agent = agent;
       session.sdkAgentId = agent.agentId;
       session.state = "running";
-      const prompt = renderPrompt(parsed);
+      const prompt = sendOverride ?? renderPrompt(parsed);
       const deltas = createDeltaBridge();
       const run = await agent.send({
         text: prompt.text,
@@ -174,6 +573,7 @@ export class RunCoordinator {
     session: Session,
     requestId: string,
     writerFactory: TurnWriterFactory,
+    sendOverride?: { text: string; images: Array<{ data: string; mimeType: string }> },
   ): Promise<void> {
     this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
     if (!session.agent) {
@@ -196,7 +596,7 @@ export class RunCoordinator {
     session.replay = undefined;
     session.appliedBoundaryId = undefined;
     const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
-    const prompt = renderPrompt(parsed);
+    const prompt = sendOverride ?? renderPrompt(parsed);
     const deltas = createDeltaBridge();
     try {
       const run = await session.agent.send({
@@ -607,6 +1007,7 @@ export class RunCoordinator {
           for (const call of session.pending.values()) {
             this.deps.registry.indexTool(call.toolUseId, session.sessionId);
           }
+          this.rememberOrdinaryCompletion(session);
           this.deps.logger.info(
             {
               session_id: session.sessionId,
@@ -618,6 +1019,7 @@ export class RunCoordinator {
         } else {
           session.state = "completed";
           session.touch(this.deps.clock);
+          this.rememberOrdinaryCompletion(session);
           this.deps.logger.info(
             {
               session_id: session.sessionId,

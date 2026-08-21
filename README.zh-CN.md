@@ -29,7 +29,7 @@
 
 - **Claude 1M 模式：** Cursor 实时目录暴露 `context=1m` 时，包括 Sonnet 4.6、Fable 5，网关会把官方 SDK 参数原样转发。
 - **客户端原生工具：** 文件、shell、网页和网络工具仍由 Claude Code、Grok 或 Codex 在你的本机工作区执行。
-- **一套工具引擎：** 三种协议共用同一个 Cursor SDK Run、并行工具、续轮、replay 和 session coordinator。
+- **一套工具引擎：** 三种协议共用同一个 Cursor SDK Run、并行工具、续轮、replay 和 session coordinator。带完整 transcript 的普通下一轮会复用同一个 durable Agent，并且只 `send` 当前用户回合。
 - **一把网关 Key，多账号共用：** Cursor 账号池持久化、按模型 round-robin、SDK 陈旧登录态恢复、语义输出前账号故障转移、Dashboard 额度、Web 控制台和 Docker。
 - **续轮冷恢复：** 客户端携带完整 transcript 时，可以重建过期或迁移的工具轮；已经执行过的同一工具由网关内部回放结果，不重复产生副作用。
 - **已集成 new-api：** 已提供外置部署、渠道模板、compose E2E 和验收 smoke。[直接查看 new-api 接入指南](docs/NEW_API_INTEGRATION.md)。
