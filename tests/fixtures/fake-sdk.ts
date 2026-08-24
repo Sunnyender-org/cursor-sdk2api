@@ -24,7 +24,7 @@ export type FakeStep =
   | { type: "tools"; calls: Array<{ name: string; input: Record<string, unknown>; id?: string; delayMs?: number }> }
   | { type: "silent-final"; text: string }
   | { type: "empty" }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; code?: string }
   | { type: "send-error"; message: string; name?: string }
   | { type: "hang" };
 
@@ -203,7 +203,7 @@ export class FakeRun implements SdkRun {
         } else if (step.type === "empty") {
           finalText = "";
         } else if (step.type === "error") {
-          this.result = { id: this.id, status: "error", error: { message: step.message } };
+          this.result = { id: this.id, status: "error", error: { message: step.message, code: step.code } };
           this.events.end();
           return;
         } else if (step.type === "hang") {

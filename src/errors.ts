@@ -63,15 +63,39 @@ export function upstreamError(message: string, status = 502): GatewayError {
   return new GatewayError("cursor_upstream_error", message, status);
 }
 
+function stringProperty(value: unknown, key: string): string {
+  if (!value || typeof value !== "object") return "";
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "string" ? property : "";
+}
+
+/** Reverse-mapped `aiserver.v1.ErrorDetails` codes the SDK routes to AuthenticationError. */
+const SDK_AUTH_CODES = new Set([
+  "NOT_LOGGED_IN",
+  "INVALID_AUTH_ID",
+  "NOT_HIGH_ENOUGH_PERMISSIONS",
+  "AGENT_REQUIRES_LOGIN",
+  "AUTH_TOKEN_NOT_FOUND",
+  "AUTH_TOKEN_EXPIRED",
+  "UNAUTHORIZED",
+]);
+
 export function sdkFailure(error: unknown): GatewayError {
   if (error instanceof GatewayError) return error;
-  const message = redactSecrets(error instanceof Error ? error.message : String(error ?? "SDK error"));
   const name = error instanceof Error ? error.name : "";
-  const code =
-    error && typeof error === "object" && "code" in error && typeof error.code === "string"
-      ? error.code
-      : "";
-  if (/AuthenticationError/i.test(name) || /unauthenticated|invalid api key|invalid credential/i.test(`${code} ${message}`)) {
+  const code = stringProperty(error, "code");
+  const message = redactSecrets(
+    error && typeof error === "object" ? stringProperty(error, "message") || "SDK error" : String(error ?? "SDK error"),
+  );
+  // A run error rehydrated from stored terminal metadata keeps the stale-auth
+  // text but loses the code, so the message stays part of the signal.
+  if (
+    /AuthenticationError/i.test(name) ||
+    SDK_AUTH_CODES.has(code) ||
+    /unauthenticated|invalid api key|invalid credential|not[ _-]?logged[ _-]?in|logging out and back in/i.test(
+      `${code} ${message}`,
+    )
+  ) {
     return authenticationError(message);
   }
   if (/RateLimitError/i.test(name) || /rate.?limit|resource_exhausted/i.test(`${code} ${message}`)) {

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { api, closeTestApp, startTestApp, weatherTool, type TestContext } from "../helpers/app.js";
 
+const STALE_SDK_AUTH = "Authentication error If you are logged in, try logging out and back in.";
+
 let ctx: TestContext | undefined;
 
 afterEach(async () => {
@@ -113,6 +115,212 @@ test("pre-semantic provider failure retries once on another managed account", as
   expect(body.content.some((item) => item.text === "served-by-b")).toBe(true);
   expect(ctx.sdk.createCalls.map((call) => call.apiKey)).toEqual(["cursor-a", "cursor-b"]);
   expect(ctx.sdk.agents.map((agent) => agent.input.apiKey)).toEqual(["cursor-b"]);
+});
+
+test("pre-semantic failover reaches a healthy account without repeating one", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-c": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      createErrorsByApiKey: {
+        "cursor-a": { message: "provider connection reset before first event" },
+        "cursor-c": { message: "provider connection reset before first event" },
+      },
+      scripts: [[{ type: "text", chunks: ["served-by-b"] }]],
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+  await addAccount(ctx, "cursor-c");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "served-by-b")).toBe(true);
+  const attempted = ctx.sdk.createCalls.map((call) => call.apiKey);
+  expect(attempted).toEqual([...new Set(attempted)]);
+  expect(ctx.sdk.agents.map((agent) => agent.input.apiKey)).toEqual(["cursor-b"]);
+});
+
+test("a broken first pick cannot starve a healthy managed account", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-c": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      createErrorsByApiKey: {
+        "cursor-a": { message: "provider connection reset before first event" },
+      },
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+  await addAccount(ctx, "cursor-c");
+
+  for (let index = 0; index < 4; index += 1) {
+    const response = await api(ctx, "/v1/messages", {
+      apiKey: "gateway-key",
+      method: "POST",
+      body: JSON.stringify(messageBody(`hello ${index}`)),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  const served = [...new Set(ctx.sdk.agents.map((agent) => agent.input.apiKey))].sort();
+  expect(served).toEqual(["cursor-b", "cursor-c"]);
+});
+
+test("a pool-wide pre-semantic failure tries every compatible account once", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-c": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      createErrorsByApiKey: {
+        "cursor-a": { message: "provider connection reset before first event" },
+        "cursor-b": { message: "provider connection reset before first event" },
+        "cursor-c": { message: "provider connection reset before first event" },
+      },
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+  await addAccount(ctx, "cursor-c");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(502);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("cursor_upstream_error");
+  expect(ctx.sdk.createCalls.map((call) => call.apiKey).sort()).toEqual(["cursor-a", "cursor-b", "cursor-c"]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
+test("a pool-wide in-band auth failure probes once and stays a retryable upstream error", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-c": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      scripts: [[{ type: "error", message: STALE_SDK_AUTH, code: "NOT_LOGGED_IN" }]],
+      credentialProbeByApiKey: { "cursor-a": "valid", "cursor-b": "valid", "cursor-c": "valid" },
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+  await addAccount(ctx, "cursor-c");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(502);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("cursor_upstream_error");
+  const attempted = ctx.sdk.createCalls.map((call) => call.apiKey);
+  expect(attempted).toHaveLength(4);
+  expect(attempted[1]).toBe(attempted[0]);
+  expect([...new Set(attempted)]).toHaveLength(3);
+  expect(ctx.sdk.credentialProbeCalls).toEqual([attempted[0]]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
+test("a definitively dead pool credential still exhausts as an authentication error", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: { "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] } },
+      createErrorsByApiKey: { "cursor-a": { name: "AuthenticationError", message: "invalid api key" } },
+      credentialProbeByApiKey: { "cursor-a": "invalid" },
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(401);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("authentication_error");
+  expect(ctx.sdk.credentialProbeCalls).toEqual([]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
+test("a semantic delta before an SDK auth failure keeps the request on one account", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      scripts: [[
+        { type: "text", chunks: ["partial"] },
+        { type: "error", message: STALE_SDK_AUTH, code: "NOT_LOGGED_IN" },
+      ]],
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify({ ...messageBody("hello"), stream: true }),
+  });
+  expect(response.status).toBe(200);
+  const text = await response.text();
+  expect(text).toContain("authentication_error");
+  expect(ctx.sdk.createCalls).toHaveLength(1);
+  expect(ctx.sdk.credentialProbeCalls).toEqual([]);
+});
+
+test("a non-streaming semantic delta before a provider failure keeps the request on one account", async () => {
+  ctx = await startTestApp({
+    config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      scripts: [[
+        { type: "text", chunks: ["partial"] },
+        { type: "error", message: "provider connection reset after the first assistant delta" },
+      ]],
+    },
+  });
+  await addAccount(ctx, "cursor-a");
+  await addAccount(ctx, "cursor-b");
+
+  const response = await api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  });
+  expect(response.status).toBe(502);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("cursor_upstream_error");
+  expect(ctx.sdk.createCalls).toHaveLength(1);
+  expect(ctx.app.registry.activeCount()).toBe(0);
 });
 
 test("managed model catalog returns the union from every configured account", async () => {

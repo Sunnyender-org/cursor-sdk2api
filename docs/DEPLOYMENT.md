@@ -96,7 +96,7 @@ Completed follow-up with `x-cursor-session-id` can `Agent.resume` within the ses
 
 - BYOK: clients send a Cursor API key. Suitable for a trusted local sidecar.
 - Managed pool: set `AUTH_MODE=managed` and `GATEWAY_ACCESS_KEY`, then import one or more Cursor keys in `/console/`. `CURSOR_API_KEY` is optional and only seeds the persistent pool.
-- New sessions use model-aware round-robin across compatible accounts. Tool continuation, completed follow-up, and exact persisted restart recovery stay bound to the original credential fingerprint. Before semantic output, managed mode may try one alternate compatible account. If the original account is removed, a self-contained tool transcript may cold-branch to another compatible account.
+- New sessions use model-aware round-robin across compatible accounts. Tool continuation, completed follow-up, and exact persisted restart recovery stay bound to the original credential fingerprint. Before semantic output, managed mode may try each remaining compatible account once. If the original account is removed, a self-contained tool transcript may cold-branch to another compatible account.
 
 BYOK credentials share the gateway process and capacity limits, but their official SDK stores and empty workspace directories are separated by credential fingerprint. This is process-local tenant isolation, not a claim of hardened hostile multi-tenant hosting; public Internet deployment still requires TLS, access controls, encrypted state, monitoring, and an explicit operator threat model.
 

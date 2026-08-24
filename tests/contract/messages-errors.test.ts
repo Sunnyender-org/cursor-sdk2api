@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "vitest";
 import { api, closeTestApp, startTestApp, weatherTool, type TestContext } from "../helpers/app.js";
 
+const STALE_SDK_AUTH = "Authentication error If you are logged in, try logging out and back in.";
+
 let ctx: TestContext;
 
 afterEach(async () => {
@@ -62,6 +64,80 @@ test("stale SDK authentication retries once after the official credential probe 
   expect(body.content.some((item) => item.text === "reauthenticated")).toBe(true);
   expect(ctx.sdk.createCalls).toHaveLength(2);
   expect(ctx.sdk.credentialProbeCalls).toEqual(["test-key-a"]);
+});
+
+test("an in-band run auth code reaches the credential probe and recovers", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      agentScripts: [
+        [[{ type: "error", message: "Session ended.", code: "AUTH_TOKEN_EXPIRED" }]],
+        [[{ type: "text", chunks: ["reauthenticated"] }]],
+      ],
+      credentialProbeByApiKey: { "test-key-a": "valid" },
+    },
+  });
+  const response = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "reauthenticated")).toBe(true);
+  expect(ctx.sdk.createCalls).toHaveLength(2);
+  expect(ctx.sdk.credentialProbeCalls).toEqual(["test-key-a"]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
+test("a rehydrated in-band run auth error without a code still recovers", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      agentScripts: [
+        [[{ type: "error", message: STALE_SDK_AUTH }]],
+        [[{ type: "text", chunks: ["reauthenticated"] }]],
+      ],
+      credentialProbeByApiKey: { "test-key-a": "valid" },
+    },
+  });
+  const response = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { content: Array<{ text?: string }> };
+  expect(body.content.some((item) => item.text === "reauthenticated")).toBe(true);
+  expect(ctx.sdk.credentialProbeCalls).toEqual(["test-key-a"]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
+test("an in-band revoked-credential run error stays a 401 without a credential probe", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      scripts: [[{ type: "error", message: "Authentication error This credential was revoked; you are not logged in." }]],
+    },
+  });
+  const response = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  const body = (await response.json()) as { error: { type: string; message: string } };
+  expect(response.status).toBe(401);
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.message).toContain("revoked");
+  expect(ctx.sdk.createCalls).toHaveLength(1);
+  expect(ctx.sdk.credentialProbeCalls).toEqual([]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
 });
 
 test("completed follow-up send failure releases the active-run slot", async () => {

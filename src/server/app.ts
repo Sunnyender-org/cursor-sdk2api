@@ -16,6 +16,8 @@ import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
 import { OrdinaryTurnJournal } from "../core/ordinary-turn-journal.js";
 import { SessionRegistry } from "../core/session-registry.js";
+import type { Session } from "../core/session.js";
+import type { TurnWriterFactory } from "../core/turn-writer.js";
 import {
   forbiddenError,
   GatewayError,
@@ -33,6 +35,7 @@ import { parseMessagesRequest } from "../protocols/anthropic/parse.js";
 import type { ParsedMessages } from "../protocols/anthropic/types.js";
 import { estimateAnthropicInputTokens } from "../protocols/anthropic/count-tokens.js";
 import { writeSseError } from "../protocols/anthropic/sse.js";
+import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
 import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
 import { writeChatStreamError } from "../protocols/openai-chat/sse.js";
 import { createChatWriterFactory } from "../protocols/openai-chat/writer.js";
@@ -108,8 +111,30 @@ function managedPreSemanticFailureCanFailover(error: unknown): boolean {
   return error.httpStatus >= 500;
 }
 
+function managedPoolExhaustedFailure(error: unknown): unknown {
+  // A managed client authenticates with the gateway key, so a credential that only looks stale is a retryable
+  // gateway condition; a definitively dead one keeps authentication_error so pool-credential alerting still fires.
+  if (error instanceof GatewayError && staleCredentialSessionError(error)) return upstreamError(error.message);
+  return error;
+}
+
 function responseStarted(res: ServerResponse): boolean {
   return res.headersSent || res.writableEnded || res.destroyed;
+}
+
+type WriterObserver = (factory: TurnWriterFactory) => TurnWriterFactory;
+
+// A non-streaming turn sends headers only at the very end, so `responseStarted` cannot tell that the model
+// already produced a billable turn on this account.
+function semanticOutputWatch(): { observe: WriterObserver; started: () => boolean } {
+  const sessions: Session[] = [];
+  return {
+    observe: (factory) => (ctx) => {
+      sessions.push(ctx.session);
+      return factory(ctx);
+    },
+    started: () => sessions.some((session) => session.hasSemanticOutput),
+  };
 }
 
 function staleCredentialSessionError(error: unknown): boolean {
@@ -251,11 +276,13 @@ export function createApp(input: {
     client: ClientAuthorization,
     parsed: ParsedMessages,
     sessionHint: string | undefined,
-    run: (auth: AuthContext) => Promise<void>,
+    run: (auth: AuthContext, observe: WriterObserver) => Promise<void>,
   ): Promise<void> => {
+    const semantic = semanticOutputWatch();
+    const attempt = (auth: AuthContext): Promise<void> => run(auth, semantic.observe);
     const first = await resolveAuth(client, parsed, sessionHint);
     try {
-      await run(first);
+      await attempt(first);
       return;
     } catch (initialError) {
       let error = initialError;
@@ -267,31 +294,52 @@ export function createApp(input: {
             "retrying pre-semantic Cursor request after credential probe",
           );
           try {
-            await run(first);
+            await attempt(first);
             return;
           } catch (retryError) {
             error = retryError;
           }
         }
       }
-      if (
-        client.mode !== "managed" ||
-        responseStarted(res) ||
-        !managedPreSemanticFailureCanFailover(error)
-      ) {
-        throw error;
+      const attempted = new Set([first.fingerprint]);
+      const exhausted = (message: string): unknown => {
+        logger.error(
+          {
+            model: parsed.model,
+            error_type: error instanceof GatewayError ? error.code : "cursor_upstream_error",
+            attempted_accounts: attempted.size,
+          },
+          message,
+        );
+        return managedPoolExhaustedFailure(error);
+      };
+      while (true) {
+        if (
+          client.mode !== "managed" ||
+          responseStarted(res) ||
+          semantic.started() ||
+          !managedPreSemanticFailureCanFailover(error)
+        ) {
+          throw error;
+        }
+        let alternate: AuthContext;
+        try {
+          alternate = await resolveAuth(client, parsed, sessionHint, attempted);
+        } catch {
+          throw exhausted("managed pre-semantic failover exhausted the compatible account pool");
+        }
+        attempted.add(alternate.fingerprint);
+        logger.warn(
+          { model: parsed.model, error_type: error instanceof GatewayError ? error.code : "cursor_upstream_error" },
+          "retrying pre-semantic Cursor request on another managed account",
+        );
+        try {
+          await attempt(alternate);
+          return;
+        } catch (alternateError) {
+          error = alternateError;
+        }
       }
-      let alternate: AuthContext;
-      try {
-        alternate = await resolveAuth(client, parsed, sessionHint, new Set([first.fingerprint]));
-      } catch {
-        throw error;
-      }
-      logger.warn(
-        { model: parsed.model, error_type: error instanceof GatewayError ? error.code : "cursor_upstream_error" },
-        "retrying pre-semantic Cursor request on another managed account",
-      );
-      await run(alternate);
     }
   };
   let shuttingDown = false;
@@ -539,8 +587,8 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const parsed = parseMessagesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        await runWithProviderRecovery(res, client, parsed, sessionHint, (auth) =>
-          coordinator.handleMessages(req, res, auth, parsed, requestId, sessionHint));
+        await runWithProviderRecovery(res, client, parsed, sessionHint, (auth, observe) =>
+          coordinator.handleMessages(req, res, auth, parsed, requestId, sessionHint, observe(createAnthropicWriter)));
         return;
       }
 
@@ -550,7 +598,7 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const chat = parseChatCompletionsRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        await runWithProviderRecovery(res, client, chat.parsed, sessionHint, (auth) =>
+        await runWithProviderRecovery(res, client, chat.parsed, sessionHint, (auth, observe) =>
           coordinator.handleMessages(
             req,
             res,
@@ -558,7 +606,7 @@ export function createApp(input: {
             chat.parsed,
             requestId,
             sessionHint,
-            createChatWriterFactory({ includeUsage: chat.includeUsage }),
+            observe(createChatWriterFactory({ includeUsage: chat.includeUsage })),
           ));
         return;
       }
@@ -569,7 +617,7 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const responses = parseResponsesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        await runWithProviderRecovery(res, client, responses.parsed, sessionHint, (auth) =>
+        await runWithProviderRecovery(res, client, responses.parsed, sessionHint, (auth, observe) =>
           coordinator.handleMessages(
             req,
             res,
@@ -577,7 +625,7 @@ export function createApp(input: {
             responses.parsed,
             requestId,
             sessionHint,
-            createResponsesWriterFactory(),
+            observe(createResponsesWriterFactory()),
           ));
         return;
       }

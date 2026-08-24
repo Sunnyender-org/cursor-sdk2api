@@ -117,7 +117,7 @@ env_key = "GATEWAY_ACCESS_KEY"
 - `/health`：能力、SDK 版本和代理传输状态
 - `STATE_DIR`：账号、SDK store 和 resume 状态
 
-Managed 模式沿用 CPA 的客户端 Key 与上游凭据分离方式：客户端只拿到 `GATEWAY_ACCESS_KEY`，导入的 Cursor Key 留在网关账号池。新会话按模型 round-robin；正常续轮固定原账号，尚未产生语义输出时允许一次备用账号重试。原账号或 SDK 会话丢失时，只要 transcript 完整且自洽，网关可安全冷恢复。BYOK 仅作为可信单用户 sidecar 的兼容模式保留。
+Managed 模式沿用 CPA 的客户端 Key 与上游凭据分离方式：客户端只拿到 `GATEWAY_ACCESS_KEY`，导入的 Cursor Key 留在网关账号池。新会话按模型 round-robin；正常续轮固定原账号，尚未产生语义输出时，其余兼容账号各允许重试一次。原账号或 SDK 会话丢失时，只要 transcript 完整且自洽，网关可安全冷恢复。BYOK 仅作为可信单用户 sidecar 的兼容模式保留。
 
 `v0.1` 是可信单进程 sidecar。账号管理接口没有单独认证；导入的 Cursor Key 会保存在仅 Owner 可读的状态文件中，导入后不会再返回给浏览器。随附 compose 已把控制台绑定到本机回环；任何公网反代都必须认证并限制 `/console/` 与 `/v0/management/*`。
 

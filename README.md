@@ -117,7 +117,7 @@ Client tools are converted to SDK `local.customTools` through MCP. The model cho
 - `/health`: capabilities, SDK version, and proxy transport mode
 - `STATE_DIR`: account, SDK store, and resume state
 
-Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin. Continuations stay pinned when the original account is healthy; before semantic output, one alternate managed account may be tried. If the original account/session is gone, an exact full transcript can cold-branch safely. BYOK remains available for a trusted single-user sidecar.
+Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin. Continuations stay pinned when the original account is healthy; before semantic output, each remaining compatible managed account may be tried once. If the original account/session is gone, an exact full transcript can cold-branch safely. BYOK remains available for a trusted single-user sidecar.
 
 `v0.1` is a trusted single-process sidecar. The management account endpoint has no separate authentication. Imported Cursor keys are stored in owner-only state files and are never returned to the browser after import. The supplied compose files bind the console to loopback; authenticate and restrict `/console/` plus `/v0/management/*` at any Internet-facing proxy.
 

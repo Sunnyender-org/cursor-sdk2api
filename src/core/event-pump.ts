@@ -162,7 +162,7 @@ export class EventPump {
       const result = await this.run.wait();
       if (this.finished) return;
       if (result.status === "error") {
-        this.fail(sdkFailure(result.error?.message ?? "SDK run error"));
+        this.fail(sdkFailure(result.error ?? "SDK run error"));
         return;
       }
       if (result.status === "cancelled") {
