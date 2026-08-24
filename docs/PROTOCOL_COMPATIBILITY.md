@@ -63,7 +63,7 @@ The gateway does not implement OpenAI `previous_response_id` reconstruction, `st
 
 Live catalog/text/tool/restart matrix is an opt-in runner (`npm run live:smoke`), not default CI. Catalog-missing required model names fail closed; they are not green skips. This file does not record live model results.
 
-Runtime discovery exposes `transcript_tool_recovery`, `stale_auth_recovery`, and `managed_account_failover` in `/health`. The last capability applies only to managed mode, only before an HTTP response has begun, and only before the turn has produced output. Managed clients authenticate with the gateway key, so a Cursor credential failure that survives every compatible account is reported as `cursor_upstream_error`; a definitively invalid, revoked, or expired credential keeps `authentication_error`.
+Runtime discovery exposes `transcript_tool_recovery`, `stale_auth_recovery`, and `managed_account_failover` in `/health`. The last capability applies only to managed mode, only before an HTTP response has begun, and only before the turn has produced output. Managed clients authenticate with the gateway key, so a Cursor credential failure that survives every compatible account, or that is unresolved when the failover admission window closes, is reported as `cursor_upstream_error`; a definitively invalid, revoked, or expired credential keeps `authentication_error`.
 
 ## Error types
 

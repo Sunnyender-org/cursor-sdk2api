@@ -111,7 +111,7 @@ function managedPreSemanticFailureCanFailover(error: unknown): boolean {
   return error.httpStatus >= 500;
 }
 
-function managedPoolExhaustedFailure(error: unknown): unknown {
+function managedFailoverExhausted(error: unknown): unknown {
   // A managed client authenticates with the gateway key, so a credential that only looks stale is a retryable
   // gateway condition; a definitively dead one keeps authentication_error so pool-credential alerting still fires.
   if (error instanceof GatewayError && staleCredentialSessionError(error)) return upstreamError(error.message);
@@ -302,6 +302,9 @@ export function createApp(input: {
         }
       }
       const attempted = new Set([first.fingerprint]);
+      // The deadline only gates when a new account may start, so wall clock stays a small multiple of one
+      // timeout instead of growing with pool size.
+      const failoverDeadline = clock.now() + config.firstEventTimeoutMs;
       const exhausted = (message: string): unknown => {
         logger.error(
           {
@@ -311,7 +314,7 @@ export function createApp(input: {
           },
           message,
         );
-        return managedPoolExhaustedFailure(error);
+        return managedFailoverExhausted(error);
       };
       while (true) {
         if (
@@ -322,6 +325,7 @@ export function createApp(input: {
         ) {
           throw error;
         }
+        if (clock.now() >= failoverDeadline) throw exhausted("managed pre-semantic failover budget spent");
         let alternate: AuthContext;
         try {
           alternate = await resolveAuth(client, parsed, sessionHint, attempted);

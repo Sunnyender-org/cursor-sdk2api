@@ -69,7 +69,7 @@ function stringProperty(value: unknown, key: string): string {
   return typeof property === "string" ? property : "";
 }
 
-/** Reverse-mapped `aiserver.v1.ErrorDetails` codes the SDK routes to AuthenticationError. */
+// Upper-cased `aiserver.v1.ErrorDetails` names and Connect codes the SDK maps to AuthenticationError and RateLimitError.
 const SDK_AUTH_CODES = new Set([
   "NOT_LOGGED_IN",
   "INVALID_AUTH_ID",
@@ -78,29 +78,43 @@ const SDK_AUTH_CODES = new Set([
   "AUTH_TOKEN_NOT_FOUND",
   "AUTH_TOKEN_EXPIRED",
   "UNAUTHORIZED",
+  "UNAUTHENTICATED",
+]);
+
+const SDK_RATE_LIMIT_CODES = new Set([
+  "API_KEY_RATE_LIMIT",
+  "FREE_USER_RATE_LIMIT_EXCEEDED",
+  "FREE_USER_USAGE_LIMIT",
+  "GENERIC_RATE_LIMIT_EXCEEDED",
+  "GPT_4_VISION_PREVIEW_RATE_LIMIT",
+  "OPENAI_RATE_LIMIT_EXCEEDED",
+  "PRO_USER_RATE_LIMIT_EXCEEDED",
+  "PRO_USER_USAGE_LIMIT",
+  "RATE_LIMITED",
+  "RATE_LIMITED_CHANGEABLE",
+  "RESOURCE_EXHAUSTED",
 ]);
 
 export function sdkFailure(error: unknown): GatewayError {
   if (error instanceof GatewayError) return error;
   const name = error instanceof Error ? error.name : "";
-  const code = stringProperty(error, "code");
+  const code = stringProperty(error, "code").toUpperCase();
   const message = redactSecrets(
     error && typeof error === "object" ? stringProperty(error, "message") || "SDK error" : String(error ?? "SDK error"),
   );
-  // A run error rehydrated from stored terminal metadata keeps the stale-auth
-  // text but loses the code, so the message stays part of the signal.
+  // The SDK's own code outranks whatever prose an upstream error happens to carry.
+  if (SDK_AUTH_CODES.has(code)) return authenticationError(message);
+  if (SDK_RATE_LIMIT_CODES.has(code)) return rateLimited(message);
+  if (/AuthenticationError/i.test(name)) return authenticationError(message);
+  if (/RateLimitError/i.test(name)) return rateLimited(message);
   if (
-    /AuthenticationError/i.test(name) ||
-    SDK_AUTH_CODES.has(code) ||
     /unauthenticated|invalid api key|invalid credential|not[ _-]?logged[ _-]?in|logging out and back in/i.test(
       `${code} ${message}`,
     )
   ) {
     return authenticationError(message);
   }
-  if (/RateLimitError/i.test(name) || /rate.?limit|resource_exhausted/i.test(`${code} ${message}`)) {
-    return rateLimited(message);
-  }
+  if (/rate.?limit|resource_exhausted/i.test(`${code} ${message}`)) return rateLimited(message);
   if (/not supported in your region|model not available|permission|forbidden|not allowed/i.test(message)) {
     return forbiddenError(message);
   }

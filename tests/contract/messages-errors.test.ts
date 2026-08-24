@@ -140,6 +140,27 @@ test("an in-band revoked-credential run error stays a 401 without a credential p
   expect(ctx.app.registry.activeCount()).toBe(0);
 });
 
+test("an in-band usage-limit run error is a 429 without a credential probe", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      scripts: [[{ type: "error", message: STALE_SDK_AUTH, code: "FREE_USER_USAGE_LIMIT" }]],
+    },
+  });
+  const response = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  expect(response.status).toBe(429);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("rate_limited");
+  expect(ctx.sdk.createCalls).toHaveLength(1);
+  expect(ctx.sdk.credentialProbeCalls).toEqual([]);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
 test("completed follow-up send failure releases the active-run slot", async () => {
   ctx = await startTestApp({
     sdk: {

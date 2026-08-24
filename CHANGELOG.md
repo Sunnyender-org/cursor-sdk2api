@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Managed pre-semantic failover now recovers an in-band stale SDK auth error through the credential probe and then tries each remaining compatible account once instead of a single alternate; no new account is admitted after the turn has produced output or after one `FIRST_EVENT_TIMEOUT_MS` has elapsed since the first pre-semantic failure. A Cursor credential failure that survives the whole pool is reported as `cursor_upstream_error`, while a definitively invalid, revoked, or expired key keeps `authentication_error`.
+
 - Ordinary turns now follow BeefAPI's Cursor Agent contract: a typed turn IR, exact-lineage Agent reuse, and `send(current turn)` instead of flattening the whole transcript on every request. Tool continuation, `x-cursor-session-id` follow-up, and cold rebuild remain. Disable with `ORDINARY_TURN_COORDINATOR=0`.
 
 - `/v1/messages` accepts sub2api compatibility roles without flattening the transcript: `system`/`developer` remain in order, historical `tool`/`function` output stays visible to the Harness, and a trailing tool result requires a real call id before entering continuation lookup.

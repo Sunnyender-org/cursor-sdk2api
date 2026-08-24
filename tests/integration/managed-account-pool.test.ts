@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FakeClock } from "../../src/clock.js";
 import { api, closeTestApp, startTestApp, weatherTool, type TestContext } from "../helpers/app.js";
 
 const STALE_SDK_AUTH = "Authentication error If you are logged in, try logging out and back in.";
@@ -30,6 +31,10 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1000
     if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${label}`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function frozenClock(): FakeClock {
+  return new FakeClock(1_000);
 }
 
 function messageBody(content: unknown = "hello", tools: unknown[] = []) {
@@ -183,6 +188,7 @@ test("a broken first pick cannot starve a healthy managed account", async () => 
 
 test("a pool-wide pre-semantic failure tries every compatible account once", async () => {
   ctx = await startTestApp({
+    clock: frozenClock(),
     config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
     sdk: {
       modelsByApiKey: {
@@ -212,8 +218,54 @@ test("a pool-wide pre-semantic failure tries every compatible account once", asy
   expect(ctx.app.registry.activeCount()).toBe(0);
 });
 
+test("stalling managed accounts cannot spend more than one failover budget", async () => {
+  const clock = new FakeClock(1_000);
+  ctx = await startTestApp({
+    clock,
+    config: {
+      authMode: "managed",
+      gatewayAccessKey: "gateway-key",
+      managedCursorKey: undefined,
+      firstEventTimeoutMs: 40_000,
+    },
+    sdk: {
+      modelsByApiKey: {
+        "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-b": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-c": { ok: true, models: [{ id: "composer-2.5" }] },
+        "cursor-d": { ok: true, models: [{ id: "composer-2.5" }] },
+      },
+      scripts: [[{ type: "hang" }]],
+    },
+  });
+  for (const apiKey of ["cursor-a", "cursor-b", "cursor-c", "cursor-d"]) await addAccount(ctx, apiKey);
+
+  let settled = false;
+  const pending = api(ctx, "/v1/messages", {
+    apiKey: "gateway-key",
+    method: "POST",
+    body: JSON.stringify(messageBody("hello")),
+  }).then((response) => {
+    settled = true;
+    return response;
+  });
+  await waitFor(() => ctx!.sdk.createCalls.length === 1, "the original account to stall");
+  clock.advance(40_000);
+  await waitFor(() => ctx!.sdk.createCalls.length === 2, "one alternate account to stall");
+  clock.advance(40_000);
+  await waitFor(() => settled, "the request to end after one spent failover budget");
+
+  const response = await pending;
+  expect(response.status).toBe(504);
+  expect(((await response.json()) as { error: { type: string } }).error.type).toBe("cursor_timeout");
+  expect(ctx.sdk.createCalls).toHaveLength(2);
+  expect(clock.now() - 1_000).toBe(80_000);
+  expect(ctx.app.registry.activeCount()).toBe(0);
+});
+
 test("a pool-wide in-band auth failure probes once and stays a retryable upstream error", async () => {
   ctx = await startTestApp({
+    clock: frozenClock(),
     config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
     sdk: {
       modelsByApiKey: {
@@ -246,6 +298,7 @@ test("a pool-wide in-band auth failure probes once and stays a retryable upstrea
 
 test("a definitively dead pool credential still exhausts as an authentication error", async () => {
   ctx = await startTestApp({
+    clock: frozenClock(),
     config: { authMode: "managed", gatewayAccessKey: "gateway-key", managedCursorKey: undefined },
     sdk: {
       modelsByApiKey: { "cursor-a": { ok: true, models: [{ id: "composer-2.5" }] } },
