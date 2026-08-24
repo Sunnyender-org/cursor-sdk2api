@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "vitest";
 import { fetchCursorDashboardQuota } from "../../src/account/cursor-dashboard.js";
 import { readAccount } from "../../src/account/service.js";
 import type { SdkAccountResult, SdkRuntime } from "../../src/sdk/port.js";
-import { formatQuota } from "../../web/src/quota.js";
+import { formatQuota, formatQuotaBreakdown } from "../../web/src/quota.js";
 import type { AccountPayload } from "../../web/src/types.js";
 
 const servers: ReturnType<typeof createServer>[] = [];
@@ -502,4 +502,67 @@ test("carries adapter output through the account payload into the console quota 
     totalPercentUsed: 10,
   })).toBe("$0.00 / $20.00");
   expect(await consoleQuotaCell({ totalSpend: 500, apiPercentUsed: 2.1, totalPercentUsed: 1.449 })).toBe("");
+});
+
+async function consoleAccountPayload(usagePayload: Record<string, unknown>): Promise<AccountPayload> {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify(usagePayload));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+  if (!quota.available) throw new Error(quota.reason);
+  const compactRecord = (record: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  const account: SdkAccountResult = {
+    ok: true,
+    identity: { apiKeyName: "local-dev" },
+    spending: compactRecord({ source: quota.source, on_demand_spend_usd: quota.onDemandSpendUsd }),
+    limits: compactRecord({
+      cursor_models_percent_used: quota.cursorModelsPercentUsed,
+      other_models_percent_used: quota.otherModelsPercentUsed,
+      auto_models_percent_used: quota.autoModelsPercentUsed,
+      on_demand_limit_type: quota.onDemandLimitType,
+      on_demand_individual_limit: quota.onDemandIndividualLimit,
+      on_demand_individual_used: quota.onDemandIndividualUsed,
+      on_demand_individual_remaining: quota.onDemandIndividualRemaining,
+      on_demand_pooled_limit: quota.onDemandPooledLimit,
+      on_demand_pooled_used: quota.onDemandPooledUsed,
+      on_demand_pooled_remaining: quota.onDemandPooledRemaining,
+    }),
+  };
+  const sdk = { getAccount: async () => account } as unknown as SdkRuntime;
+  return (await readAccount(sdk, "key")) as unknown as AccountPayload;
+}
+
+test("carries the auto meter and both on-demand scopes into the console breakdown", async () => {
+  const payload = await consoleAccountPayload({
+    planUsage: { includedSpend: 1250, remaining: 750, limit: 2000, totalPercentUsed: 30, autoPercentUsed: 10, apiPercentUsed: 20 },
+    spendLimitUsage: { limitType: "individual", totalSpend: 300, individualLimit: 5000, individualUsed: 300, individualRemaining: 4700 },
+  });
+
+  expect(payload.spending?.on_demand_spend_usd).toBe(3);
+  expect(formatQuotaBreakdown(payload)).toBe(
+    "Cursor Models 30.0% · Other Models 20.0% · Auto 10.0% · On-demand (individual) $3.00 used, $47.00 remaining, $50.00 limit",
+  );
+});
+
+test("never renders an on-demand dollar the spend limit payload reported as null", async () => {
+  const payload = await consoleAccountPayload({
+    planUsage: { totalPercentUsed: 1.04, apiPercentUsed: 5.16, autoPercentUsed: 0.31 },
+    spendLimitUsage: { limitType: "individual", individualLimit: 5000, individualUsed: null, individualRemaining: null },
+  });
+
+  expect(payload.limits).not.toHaveProperty("on_demand_individual_used");
+  expect(payload.limits).not.toHaveProperty("on_demand_individual_remaining");
+  expect(formatQuotaBreakdown(payload)).toBe(
+    "Cursor Models 1.0% · Other Models 5.2% · Auto 0.3% · On-demand (individual) $50.00 limit",
+  );
 });

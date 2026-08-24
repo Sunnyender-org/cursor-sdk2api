@@ -173,6 +173,69 @@ test("quota formatter suppresses a zero remaining and limit even when a spend is
   ).toBe("");
 });
 
+test("quota breakdown renders the auto meter and both on-demand scopes", () => {
+  expect(
+    formatQuotaBreakdown({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { plan_name: "Ultra" },
+      limits: {
+        cursor_models_percent_used: 1.04,
+        other_models_percent_used: 5.16,
+        auto_models_percent_used: 0.31,
+        on_demand_individual_used: 3,
+        on_demand_individual_remaining: 47,
+        on_demand_individual_limit: 50,
+        on_demand_pooled_used: 12,
+        on_demand_pooled_limit: 200,
+      },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe(
+    "Cursor Models 1.0% · Other Models 5.2% · Auto 0.3% · On-demand (individual) $3.00 used, $47.00 remaining, $50.00 limit · On-demand (pooled) $12.00 used, $200.00 limit",
+  );
+});
+
+test("quota breakdown draws no on-demand row from a limit type without reported dollars", () => {
+  expect(
+    formatQuotaBreakdown({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      limits: {
+        cursor_models_percent_used: 1.04,
+        on_demand_limit_type: "individual",
+        on_demand_individual_limit: 0,
+        on_demand_individual_used: 0,
+        on_demand_individual_remaining: 0,
+      },
+      capabilities: { identity: true, spending: false, limits: true },
+    }),
+  ).toBe("Cursor Models 1.0%");
+  expect(
+    formatQuotaBreakdown({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      limits: { on_demand_limit_type: "pooled" },
+      capabilities: { identity: true, spending: false, limits: true },
+    }),
+  ).toBe("");
+});
+
+test("quota breakdown keeps the zero spend of a configured but unused on-demand limit", () => {
+  expect(
+    formatQuotaBreakdown({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      limits: {
+        on_demand_individual_used: 0,
+        on_demand_individual_remaining: 50,
+        on_demand_individual_limit: 50,
+      },
+      capabilities: { identity: true, spending: false, limits: true },
+    }),
+  ).toBe("On-demand (individual) $0.00 used, $50.00 remaining, $50.00 limit");
+});
+
 test("key mask keeps the edges and hides the middle", () => {
   expect(maskKey("cursor_abcdefghijklmnop")).toBe("cursor…mnop");
 });
