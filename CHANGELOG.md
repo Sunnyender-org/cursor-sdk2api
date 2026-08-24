@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/v1/account` derives `limits.remaining_usd` from the included limit minus the included spend when Cursor omits `planUsage.remaining` at zero, so an exhausted allowance renders as a real quota instead of a raw payload dump in the Operator Console. `limits.used_percent` is now absent when its inputs are missing or contradict the limit, instead of silently switching to the different `totalPercentUsed` denominator, and null-like usage fields stay unreported rather than coercing to a confident zero.
+
 - Ordinary turns now follow BeefAPI's Cursor Agent contract: a typed turn IR, exact-lineage Agent reuse, and `send(current turn)` instead of flattening the whole transcript on every request. Tool continuation, `x-cursor-session-id` follow-up, and cold rebuild remain. Disable with `ORDINARY_TURN_COORDINATOR=0`.
 
 - `/v1/messages` accepts sub2api compatibility roles without flattening the transcript: `system`/`developer` remain in order, historical `tool`/`function` output stays visible to the Harness, and a trailing tool result requires a real call id before entering continuation lookup.

@@ -1,19 +1,9 @@
 import type { AccountPayload } from "./types.js";
 
-function compactValue(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map(compactValue).filter(Boolean).join(", ");
-  if (typeof value === "object") {
-    return Object.entries(value as Record<string, unknown>)
-      .slice(0, 4)
-      .map(([key, inner]) => `${key} ${compactValue(inner)}`)
-      .join(" · ");
-  }
-  return "";
-}
-
 function finiteNumber(value: unknown): number | undefined {
+  // Number(null), Number("") and Number(false) are a finite 0 the gateway never reported.
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string" || !value.trim()) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
 }
@@ -29,10 +19,13 @@ export function formatQuota(account?: AccountPayload): string {
   if (remaining === 0 && limit === 0) return "";
   if (remaining !== undefined && limit !== undefined) return `${usd(remaining)} / ${usd(limit)}`;
   if (remaining !== undefined) return usd(remaining);
+  const used = account.capabilities.spending ? finiteNumber(account.spending?.used_usd) : undefined;
+  const knownLimit = account.capabilities.limits ? limit : undefined;
+  if ([used, knownLimit].every((value) => value === undefined || value === 0)) return "";
   const parts: string[] = [];
-  if (account.capabilities.spending && account.spending) parts.push(compactValue(account.spending));
-  if (account.capabilities.limits && account.limits) parts.push(compactValue(account.limits));
-  return parts.filter(Boolean).join(" · ");
+  if (used !== undefined) parts.push(`${usd(used)} used`);
+  if (knownLimit !== undefined) parts.push(`${usd(knownLimit)} limit`);
+  return parts.join(" / ");
 }
 
 export function formatQuotaBreakdown(account?: AccountPayload): string {

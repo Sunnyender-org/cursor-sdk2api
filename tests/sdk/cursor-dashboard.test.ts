@@ -3,6 +3,10 @@ import type { AddressInfo } from "node:net";
 import { brotliCompressSync } from "node:zlib";
 import { afterEach, expect, test } from "vitest";
 import { fetchCursorDashboardQuota } from "../../src/account/cursor-dashboard.js";
+import { readAccount } from "../../src/account/service.js";
+import type { SdkAccountResult, SdkRuntime } from "../../src/sdk/port.js";
+import { formatQuota } from "../../web/src/quota.js";
+import type { AccountPayload } from "../../web/src/types.js";
 
 const servers: ReturnType<typeof createServer>[] = [];
 
@@ -233,4 +237,269 @@ test("decodes Cursor dashboard Brotli bytes when a proxy strips Content-Encoding
     remainingUsd: 9,
     limitUsd: 10,
   });
+});
+
+test("derives an exhausted included allowance that the dashboard omits", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({
+        planUsage: {
+          totalSpend: 3450,
+          includedSpend: 2000,
+          bonusSpend: 1450,
+          limit: 2000,
+          autoPercentUsed: 4,
+          apiPercentUsed: 50,
+          totalPercentUsed: 10,
+        },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro", price: "$20/mo" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({
+    available: true,
+    usedUsd: 20,
+    remainingUsd: 0,
+    limitUsd: 20,
+    bonusSpendUsd: 14.5,
+    usedPercent: 100,
+  });
+});
+
+test("leaves remaining unreported when the included spend is unknown", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({ planUsage: { totalSpend: 1200, limit: 2000, totalPercentUsed: 3.478 } }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({ available: true, totalSpendUsd: 12, limitUsd: 20 });
+  if (quota.available) expect(quota.remainingUsd).toBeUndefined();
+});
+
+test("omits used percent instead of reporting the total usage axis under the same name", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({
+        planUsage: { totalSpend: 500, apiPercentUsed: 2.1, totalPercentUsed: 1.449 },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({ available: true, totalSpendUsd: 5, cursorModelsPercentUsed: 1.449 });
+  if (quota.available) expect(quota.usedPercent).toBeUndefined();
+});
+
+test("treats null-like usage fields as unreported instead of zero", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({
+        planUsage: {
+          limit: 2000,
+          includedSpend: null,
+          remaining: "",
+          totalSpend: false,
+          apiPercentUsed: [],
+          autoPercentUsed: {},
+          totalPercentUsed: 1.5,
+        },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({ available: true, limitUsd: 20, cursorModelsPercentUsed: 1.5 });
+  if (quota.available) {
+    expect(quota.usedUsd).toBeUndefined();
+    expect(quota.remainingUsd).toBeUndefined();
+    expect(quota.totalSpendUsd).toBeUndefined();
+    expect(quota.usedPercent).toBeUndefined();
+    expect(quota.otherModelsPercentUsed).toBeUndefined();
+    expect(quota.autoModelsPercentUsed).toBeUndefined();
+  }
+});
+
+test("fails closed when every current-period usage field is null-like", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({
+        planUsage: { limit: null, remaining: "", includedSpend: false, totalSpend: [] },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toEqual({
+    available: false,
+    source: "cursor_dashboard_rpc",
+    reason: "dashboard_invalid_response",
+  });
+});
+
+test("reads a numeric usage string as a number", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({ planUsage: { limit: "2000", includedSpend: "500" } }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({ available: true, usedUsd: 5, remainingUsd: 15, limitUsd: 20, usedPercent: 25 });
+});
+
+test("publishes an over-limit included spend without a percentage and drops a negative one", async () => {
+  const usage = async (planUsage: Record<string, unknown>) => {
+    const baseUrl = await dashboardServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/auth/exchange_user_api_key") {
+        response.end(JSON.stringify({ accessToken: "access" }));
+        return;
+      }
+      if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+        response.end(JSON.stringify({ planUsage }));
+        return;
+      }
+      response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+    });
+    return fetchCursorDashboardQuota("key", { baseUrl });
+  };
+
+  const overLimit = await usage({ limit: 2000, includedSpend: 2500 });
+  const negative = await usage({ limit: 2000, includedSpend: -500 });
+
+  expect(overLimit).toMatchObject({ available: true, usedUsd: 25, limitUsd: 20 });
+  if (overLimit.available) {
+    expect(overLimit.remainingUsd).toBeUndefined();
+    expect(overLimit.usedPercent).toBeUndefined();
+  }
+  expect(negative).toMatchObject({ available: true, limitUsd: 20 });
+  if (negative.available) {
+    expect(negative.usedUsd).toBeUndefined();
+    expect(negative.remainingUsd).toBeUndefined();
+    expect(negative.usedPercent).toBeUndefined();
+  }
+});
+
+test("leaves used unreported when the remaining amount contradicts the limit", async () => {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({ planUsage: { limit: 2000, remaining: 5000 } }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+
+  expect(quota).toMatchObject({ available: true, remainingUsd: 50, limitUsd: 20 });
+  if (quota.available) {
+    expect(quota.usedUsd).toBeUndefined();
+    expect(quota.usedPercent).toBeUndefined();
+  }
+});
+
+async function consoleQuotaCell(planUsage: Record<string, unknown>): Promise<string> {
+  const baseUrl = await dashboardServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/auth/exchange_user_api_key") {
+      response.end(JSON.stringify({ accessToken: "access" }));
+      return;
+    }
+    if (request.url?.endsWith("/GetCurrentPeriodUsage")) {
+      response.end(JSON.stringify({ planUsage }));
+      return;
+    }
+    response.end(JSON.stringify({ planInfo: { planName: "Pro" } }));
+  });
+  const quota = await fetchCursorDashboardQuota("key", { baseUrl });
+  if (!quota.available) throw new Error(quota.reason);
+  const compactRecord = (record: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  const account: SdkAccountResult = {
+    ok: true,
+    identity: { apiKeyName: "local-dev" },
+    spending: compactRecord({
+      source: quota.source,
+      plan_name: quota.planName,
+      used_usd: quota.usedUsd,
+      total_spend_usd: quota.totalSpendUsd,
+      bonus_spend_usd: quota.bonusSpendUsd,
+    }),
+    limits: compactRecord({
+      remaining_usd: quota.remainingUsd,
+      limit_usd: quota.limitUsd,
+      used_percent: quota.usedPercent,
+      cursor_models_percent_used: quota.cursorModelsPercentUsed,
+      other_models_percent_used: quota.otherModelsPercentUsed,
+    }),
+  };
+  const sdk = { getAccount: async () => account } as unknown as SdkRuntime;
+  return formatQuota((await readAccount(sdk, "key")) as unknown as AccountPayload);
+}
+
+test("carries adapter output through the account payload into the console quota cell", async () => {
+  expect(await consoleQuotaCell({
+    totalSpend: 3450,
+    includedSpend: 2000,
+    bonusSpend: 1450,
+    limit: 2000,
+    totalPercentUsed: 10,
+  })).toBe("$0.00 / $20.00");
+  expect(await consoleQuotaCell({ totalSpend: 500, apiPercentUsed: 2.1, totalPercentUsed: 1.449 })).toBe("");
 });

@@ -75,6 +75,104 @@ test("quota formatter keeps Cursor and Claude-family usage percentages separate"
   ).toBe("Cursor Models 1.0% · Other Models 5.2%");
 });
 
+test("quota breakdown skips a percentage the gateway never reported", () => {
+  expect(
+    formatQuotaBreakdown({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { plan_name: "Ultra" },
+      limits: { cursor_models_percent_used: null, other_models_percent_used: 5.16 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("Other Models 5.2%");
+});
+
+test("quota formatter labels a known limit instead of dumping raw payload keys", () => {
+  const quota = formatQuota({
+    status: "ok",
+    identity: { api_key_name: "local-dev" },
+    spending: { source: "cursor_dashboard_rpc", plan_name: "Pro", plan_owner: "PLAN_OWNER_STRIPE" },
+    limits: { limit_usd: 20, billing_cycle_start: "1700000000000", cursor_models_percent_used: 10 },
+    capabilities: { identity: true, spending: true, limits: true },
+  });
+
+  expect(quota).not.toContain("billing_cycle_start");
+  expect(quota).not.toContain("plan_owner");
+  expect(quota).toBe("$20.00 limit");
+});
+
+test("quota formatter keeps a known spend and limit when remaining is unreported", () => {
+  expect(
+    formatQuota({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { plan_name: "Pro", used_usd: 12 },
+      limits: { limit_usd: 20, cursor_models_percent_used: 10 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("$12.00 used / $20.00 limit");
+});
+
+test("quota formatter respects a payload that declares spending and limits unavailable", () => {
+  expect(
+    formatQuota({
+      status: "partial",
+      identity: { api_key_name: "local-dev" },
+      spending: { used_usd: 12 },
+      limits: { limit_usd: 20 },
+      capabilities: { identity: true, spending: false, limits: false },
+    }),
+  ).toBe("");
+});
+
+test("quota formatter reports nothing when no dollar field is recognized", () => {
+  expect(
+    formatQuota({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { source: "cursor_dashboard_rpc", plan_name: "Pro" },
+      limits: { billing_cycle_start: "1700000000000", cursor_models_percent_used: 10 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("");
+});
+
+test("quota formatter never renders a null dollar field as zero", () => {
+  expect(
+    formatQuota({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { used_usd: null },
+      limits: { remaining_usd: null, limit_usd: 20 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("$20.00 limit");
+});
+
+test("quota formatter does not publish an all-zero spend and limit as real usage", () => {
+  expect(
+    formatQuota({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { used_usd: 0 },
+      limits: { limit_usd: 0 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("");
+});
+
+test("quota formatter suppresses a zero remaining and limit even when a spend is known", () => {
+  expect(
+    formatQuota({
+      status: "ok",
+      identity: { api_key_name: "local-dev" },
+      spending: { used_usd: 5 },
+      limits: { remaining_usd: 0, limit_usd: 0 },
+      capabilities: { identity: true, spending: true, limits: true },
+    }),
+  ).toBe("");
+});
+
 test("key mask keeps the edges and hides the middle", () => {
   expect(maskKey("cursor_abcdefghijklmnop")).toBe("cursor…mnop");
 });

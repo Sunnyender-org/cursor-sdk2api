@@ -79,6 +79,9 @@ class DashboardResponseError extends Error {
 const activeExchanges = new Map<string, Promise<string>>();
 
 function optionalNumber(value: unknown): number | undefined {
+  // Number(null), Number(""), Number(false) and Number([]) are a finite 0 the RPC never sent.
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string" || !value.trim()) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
 }
@@ -284,10 +287,27 @@ export async function fetchCursorDashboardQuota(
     const spendLimitUsage = (usagePayload.spendLimitUsage ?? {}) as Record<string, unknown>;
     const planInfo = (planPayload.planInfo ?? {}) as Record<string, unknown>;
     const limitCents = ownNumber(planUsage, "limit");
-    const remainingCents = ownNumber(planUsage, "remaining");
+    let remainingCents = ownNumber(planUsage, "remaining");
     let usedCents = ownNumber(planUsage, "includedSpend");
-    if (usedCents === undefined && limitCents !== undefined && remainingCents !== undefined) {
-      usedCents = Math.max(0, limitCents - remainingCents);
+    // A spend below zero is not a spend, and Cursor omits planUsage.remaining once the
+    // allowance is exhausted; derive the missing side only from a pair that adds up.
+    if (usedCents !== undefined && usedCents < 0) usedCents = undefined;
+    if (
+      usedCents === undefined &&
+      limitCents !== undefined &&
+      remainingCents !== undefined &&
+      remainingCents >= 0 &&
+      remainingCents <= limitCents
+    ) {
+      usedCents = limitCents - remainingCents;
+    }
+    if (
+      remainingCents === undefined &&
+      limitCents !== undefined &&
+      usedCents !== undefined &&
+      usedCents <= limitCents
+    ) {
+      remainingCents = limitCents - usedCents;
     }
     const totalSpendCents = ownNumber(planUsage, "totalSpend");
     const cursorModelsPercentUsed = ownNumber(planUsage, "totalPercentUsed");
@@ -304,9 +324,11 @@ export async function fetchCursorDashboardQuota(
     ].every((value) => value === undefined)) {
       return { available: false, source: "cursor_dashboard_rpc", reason: "dashboard_invalid_response" };
     }
-    const usedPercent = limitCents !== undefined && limitCents > 0 && usedCents !== undefined
-      ? (usedCents / limitCents) * 100
-      : cursorModelsPercentUsed;
+    // totalPercentUsed is a different denominator, and a spend past the limit is no fraction of it.
+    const usedPercent =
+      limitCents !== undefined && limitCents > 0 && usedCents !== undefined && usedCents <= limitCents
+        ? (usedCents / limitCents) * 100
+        : undefined;
     const cents = (record: Record<string, unknown>, key: string): number | undefined => {
       const value = ownNumber(record, key);
       return value === undefined ? undefined : value / 100;
