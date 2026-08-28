@@ -1,6 +1,6 @@
 {
   "name": "cursor-sdk2api",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Independent MIT gateway that exposes official @cursor/sdk as Anthropic- and OpenAI-compatible HTTP APIs.",
   "license": "MIT",
   "type": "module",
