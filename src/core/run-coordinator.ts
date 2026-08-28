@@ -34,7 +34,13 @@ import { SessionRegistry } from "./session-registry.js";
 import { batchDigest, mapClientTools } from "./tool-bridge.js";
 import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
-import type { TurnWriter, TurnWriterFactory } from "./turn-writer.js";
+import type { TurnWriter, TurnWriterFactory, TurnWriterSession } from "./turn-writer.js";
+
+interface OrdinaryReplayEntry {
+  turn: NonNullable<Session["replay"]>["turn"];
+  writerSession: TurnWriterSession;
+  expiresAt: number;
+}
 
 export interface CoordinatorDeps {
   config: GatewayConfig;
@@ -98,13 +104,25 @@ export class RunCoordinator {
     { expiresAt: number; promise: Promise<{ session: Session; pump: EventPump }> }
   >();
   private readonly ordinaryInflight = new Map<string, Promise<void>>();
-  private readonly ordinaryReplay = new Map<string, { session: Session; expiresAt: number }>();
+  private readonly ordinaryReplay = new Map<string, OrdinaryReplayEntry>();
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.deps.ordinaryJournal?.setOnExpire((record) => {
       const session = this.findSessionByAgentId(record.agentId);
       if (session) this.deps.registry.forget(session, "ordinary_turn_expired");
     });
+  }
+
+  ordinaryReplayCount(): number {
+    return this.ordinaryReplay.size;
+  }
+
+  sweepOrdinaryState(): void {
+    this.deps.ordinaryJournal?.sweepExpired();
+    const now = this.deps.clock.now();
+    for (const [key, replay] of this.ordinaryReplay) {
+      if (now >= replay.expiresAt) this.ordinaryReplay.delete(key);
+    }
   }
 
   async handleMessages(
@@ -117,7 +135,7 @@ export class RunCoordinator {
     writerFactory: TurnWriterFactory = createAnthropicWriter,
   ): Promise<void> {
     this.deps.registry.sweep();
-    this.deps.ordinaryJournal?.sweepExpired();
+    this.sweepOrdinaryState();
     if (parsed.continuation) {
       await this.continueTurn(req, res, auth, parsed, parsed.continuation, requestId, writerFactory);
       return;
@@ -173,10 +191,10 @@ export class RunCoordinator {
     if (inflight) {
       await inflight;
       const cached = this.ordinaryReplay.get(key);
-      if (!cached?.session.replay) {
+      if (!cached) {
         throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
       }
-      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      this.writeReplay(res, cached, parsed.stream, requestId, writerFactory);
       return true;
     }
 
@@ -192,10 +210,10 @@ export class RunCoordinator {
     if (decision.action === "tool_continuation") return false;
     if (decision.action === "replay") {
       const cached = this.ordinaryReplay.get(key);
-      if (!cached?.session.replay) {
+      if (!cached) {
         throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
       }
-      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      this.writeReplay(res, cached, parsed.stream, requestId, writerFactory);
       return true;
     }
     if (decision.action === "fail_closed") {
@@ -206,10 +224,10 @@ export class RunCoordinator {
       if (pending) {
         await pending;
         const cached = this.ordinaryReplay.get(key);
-        if (!cached?.session.replay) {
+        if (!cached) {
           throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
         }
-        this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+        this.writeReplay(res, cached, parsed.stream, requestId, writerFactory);
         return true;
       }
     }
@@ -253,10 +271,10 @@ export class RunCoordinator {
     if (existing) {
       await existing;
       const cached = this.ordinaryReplay.get(key);
-      if (!cached?.session.replay) {
+      if (!cached) {
         throw sessionLost("completed Cursor ordinary turn cannot be replayed without its in-memory response");
       }
-      this.writeReplay(res, cached.session, parsed.stream, requestId, writerFactory);
+      this.writeReplay(res, cached, parsed.stream, requestId, writerFactory);
       return;
     }
 
@@ -499,7 +517,12 @@ export class RunCoordinator {
     };
     journal.upsert(completed);
     this.ordinaryReplay.set(ordinaryReplayKey(turn), {
-      session,
+      turn: structuredClone(session.replay.turn),
+      writerSession: {
+        sessionId: session.sessionId,
+        modelId: session.modelId,
+        createdAt: session.createdAt,
+      },
       expiresAt: completed.expiresAt,
     });
     if (session.state === "completed") {
@@ -697,7 +720,7 @@ export class RunCoordinator {
       throw sessionConflict("duplicate tool_use_id with a different result digest");
     }
     if (session.lastResultDigest === digest && session.state === "completed" && session.replay) {
-      this.writeReplay(res, session, parsed.stream, requestId, writerFactory);
+      this.writeReplay(res, { turn: session.replay.turn, writerSession: session }, parsed.stream, requestId, writerFactory);
       return;
     }
     if (session.state === "resuming" && session.lastResultDigest === digest && session.pump) {
@@ -1142,18 +1165,17 @@ export class RunCoordinator {
 
   private writeReplay(
     res: ServerResponse,
-    session: Session,
+    replay: { turn: NonNullable<Session["replay"]>["turn"]; writerSession: TurnWriterSession },
     stream: boolean,
     requestId: string,
     writerFactory: TurnWriterFactory,
   ): void {
-    const turn = session.replay?.turn;
-    if (!turn) throw sessionLost("Replay record is missing");
+    const turn = replay.turn;
     const writer = writerFactory({
       res,
       stream,
       requestId,
-      session,
+      session: replay.writerSession,
       messageId: turn.messageId,
     });
     writer.finish(turn, { replayed: true });

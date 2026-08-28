@@ -299,7 +299,7 @@ export function createApp(input: {
     try {
       registry.sweep();
       lineage.sweep();
-      ordinaryJournal.sweepExpired();
+      coordinator.sweepOrdinaryState();
     } catch {
       // sweep must not crash the process
     }

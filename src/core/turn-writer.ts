@@ -8,10 +8,12 @@ export interface TurnWriter extends ResponseSink {
   fail(error: unknown): void;
 }
 
+export type TurnWriterSession = Pick<Session, "sessionId" | "modelId" | "createdAt">;
+
 export interface TurnWriterContext {
   res: ServerResponse;
   requestId: string;
-  session: Session;
+  session: TurnWriterSession;
   stream: boolean;
   messageId: string;
 }
