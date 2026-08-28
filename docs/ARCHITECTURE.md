@@ -9,6 +9,7 @@ HTTP /v1/messages | /v1/chat/completions | /v1/responses
   -> protocol parse (Chat/Responses convert to canonical ParsedMessages)
   -> CursorAgentTurn (protocol-neutral ordinary-turn IR)
   -> RunCoordinator
+       -> SdkRunDriver (the only create/resume/send/pump wiring)
        -> tool_result: existing ATTACH / lineage resume / transcript recovery
        -> exact successor: Agent.resume/send(current turn text+images only)
        -> unknown/fork/compact: cold rebuild with full transcript fallback
@@ -48,11 +49,11 @@ Pending calls live in a `Map<toolUseId, PendingCall>`. There is no single-pendin
 
 ## Restart
 
-SDK Agent history lives in credential-partitioned `$STATE_DIR/sdk-store/<fingerprint>` directories via the official `JsonlLocalAgentStore`. Each credential also receives a private empty-workspace partition. Gateway lineage (`$STATE_DIR/lineage`) keeps only resume metadata: session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids, optional result digest, and timestamps.
+SDK Agent history lives in credential-partitioned `$STATE_DIR/sdk-store/<fingerprint>` directories via the official `JsonlLocalAgentStore`. Each credential also receives a private empty-workspace partition. Gateway lineage (`$STATE_DIR/lineage`) keeps only resume metadata: session id, SDK agent id, credential fingerprint, model and explicit model parameters, canonical session-policy and executable-tool-catalog digests, state, pending tool ids, optional result digest, and timestamps. Lineage schema v2 fails closed and quarantines older/incomplete records instead of silently resuming them.
 
 Ordinary multi-turn requests without `x-cursor-session-id` use a credential-free journal of digests (`STATE_DIR/ordinary-turns.json`). Exact linear successors reuse the same Agent and `send()` only the latest user text/images. Forks, compact/missing anchors, model/effort/tool-catalog mismatches, and credential rotation cold-rebuild. Identical request digests replay in-process; after a process restart they fail closed because assistant bodies are not persisted.
 
-Completed follow-up with `x-cursor-session-id` looks up lineage, checks fingerprint/model, then `Agent.resume` + `send` on that same store. `ORDINARY_TURN_COORDINATOR=0` restores the previous flatten-every-turn path. Pending callback Promises are not serialized; the lineage stores only tool ids and names. After owner death, an exact credential/model/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
+Completed follow-up with `x-cursor-session-id` looks up lineage, checks credential/model/session policy, then `Agent.resume` + `send` on that same store. `ORDINARY_TURN_COORDINATOR=0` restores the previous flatten-every-turn path. Pending callback Promises are not serialized; the lineage stores only tool ids, names, and policy digests. After owner death, an exact credential/model/tool-catalog/tool-id batch resumes the persisted Agent and sends a synthetic host-recovery turn with `local.force=true`. Concurrent duplicate-same recovery is singleflight. Assistant replay bodies are not persisted, so duplicate-same after a later process restart still has no persisted response body.
 
 When no exact live or persisted owner can attach, tool continuation may cold-branch only from a self-contained transcript. The latest assistant tool batch must exactly match the submitted result ids and every call must exist in the request catalog. Historical completed calls are indexed by stable tool-name/input signature; if the recovered Harness requests one again, the gateway returns the recorded result internally rather than exposing the same side effect to the client twice. Identical recovery requests are singleflight and replayable for the normal replay TTL.
 
@@ -62,4 +63,4 @@ Before any semantic response is emitted, a generic SDK authentication-session fa
 
 Production uses `createCursorRuntime({ stateDir })` and passes the matching credential-partitioned `JsonlLocalAgentStore` and workspace to every `Agent.create` and `Agent.resume`. Tests inject `FakeSdk`. The HTTP layer never imports `@cursor/sdk` directly except through that adapter.
 
-Gateway lineage is a separate JSON file store under `STATE_DIR/lineage`. It recovers **completed** Agent ids only. Pending tool callbacks are not serialized.
+Gateway lineage is a separate JSON file store under `STATE_DIR/lineage`. It recovers completed Agent ids and exact pending-tool metadata; pending callback Promises themselves are never serialized.

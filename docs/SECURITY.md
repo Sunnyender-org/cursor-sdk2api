@@ -33,6 +33,6 @@ separately protected environment secret.
 - Duplicate different tool results fail closed to avoid a second side effect.
 - After restart, pending continuations prefer persisted SDK Agent lineage with an exact credential, model, tool catalog, and pending tool-id batch. A cold branch is allowed only when the client supplies a complete transcript whose latest assistant tool batch exactly matches the submitted results; otherwise it fails closed.
 - Cold recovery never blindly re-executes a completed external tool. Historical results are replayed only for the same stable tool-name/input signature, in transcript order; genuinely new calls still return to the client.
-- Completed resume is bound to credential fingerprint + model. Mismatch is `409 cursor_session_conflict`.
+- Completed resume is bound to credential fingerprint + canonical model/tool/session policy. Mismatch is `409 cursor_session_conflict`.
 - Gateway lineage files are owner-only (`0700`/`0600`) and contain only resume metadata, including non-secret model parameters; they omit API keys, prompts, system text, tool schemas/args/results, and assistant replay bodies. Corrupt records are quarantined and ignored. Optional `lastResultDigest` is a hash, not a payload.
 - `STATE_DIR` is sensitive local state: lineage metadata plus the official SDK store (conversation/checkpoint payloads). Treat it as owner-only. Prefer an encrypted volume and `0700` access; do not share or backup the directory as if it were anonymous cache.

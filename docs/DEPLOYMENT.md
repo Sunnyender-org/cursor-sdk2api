@@ -86,7 +86,7 @@ Set `STATE_DIR` for:
 
 Host / local-dev default (no `STATE_DIR`) is a process temp path: `$TMPDIR/cursor-sdk2api/state`. The container **image** and `docker-compose.yml` default `STATE_DIR` to `/data` and compose declares a named volume. A bare `docker run` without `-e STATE_DIR` still gets `/data` from the image `ENV`.
 
-Lineage stores only session id, SDK agent id, credential fingerprint, model and explicit model parameters, state, pending tool ids and names, optional result digest, and timestamps. It does not store API keys, prompts, tool args, or tool results. Pending tool results can resume the persisted SDK Agent after restart when the client resends the exact tool catalog and pending id batch. Assistant replay bodies are **not** persisted, so duplicate-same replay after a later restart is still unavailable.
+Lineage schema v2 stores only session id, SDK agent id, credential fingerprint, model and explicit model parameters, canonical session-policy and executable-tool-catalog digests, state, pending tool ids and names, optional result digest, and timestamps. It does not store API keys, prompts, tool schemas/args/results, or assistant bodies. Older/incomplete lineage is quarantined and fails closed. Pending tool results can resume the persisted SDK Agent after restart when the client resends the exact tool catalog and pending id batch. Assistant replay bodies are **not** persisted, so duplicate-same replay after a later restart is still unavailable.
 
 Session/registry TTL and the periodic sweep share the same clock. Completed and recoverable pending lineage expire with `SESSION_TTL_MS` (default 30 minutes), then they are deleted. Graceful shutdown does not delete recoverable lineage.
 
@@ -107,7 +107,7 @@ In-process SDK Run handles and pending tool Promises cannot move to another proc
 1. Stop sending new sessions to the old instance (`SIGTERM` starts drain).
 2. Keep routing existing tool-result traffic to the same instance (sticky ownership).
 3. Wait until active sessions reach zero or the drain deadline.
-4. Then replace the process. Completed lineage under `STATE_DIR` survives; pending tool turns do not.
+4. Then replace the process. Completed lineage and exact pending-tool metadata under `STATE_DIR` survive; live callback Promises do not. A restarted owner resumes the persisted Agent with the validated result batch rather than reusing the lost Promise.
 
 A replica without the original live handle first tries persisted lineage. If that is unavailable, it may cold-branch only from a complete transcript with an exact latest tool batch; otherwise it returns `409 cursor_session_lost` rather than an empty success.
 
