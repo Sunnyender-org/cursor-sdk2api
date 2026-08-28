@@ -16,6 +16,7 @@ export interface OrdinaryTurnRecord {
   parentAssistantAnchor: string;
   turnIndex: number;
   toolCatalogDigest: string;
+  sessionPolicyFingerprint?: string;
   assistantAnchor: string;
   agentId: string;
   credentialFingerprint: string;
@@ -50,6 +51,12 @@ function validateRecord(record: OrdinaryTurnRecord): void {
   }
   if (!record.lineageKey || !record.requestDigest || !record.effectiveModel) {
     throw new Error("incomplete Cursor ordinary-turn record");
+  }
+  if (
+    record.sessionPolicyFingerprint !== undefined &&
+    !/^[a-f0-9]{64}$/.test(record.sessionPolicyFingerprint)
+  ) {
+    throw new Error("invalid Cursor ordinary-turn session policy fingerprint");
   }
   if (record.tenantScope && !/^[a-f0-9]{64}$/.test(record.tenantScope)) {
     throw new Error("invalid Cursor ordinary-turn tenant scope");

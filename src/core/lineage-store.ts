@@ -5,12 +5,14 @@ import type { Clock } from "../clock.js";
 export type LineageState = "completed" | "awaiting_tool_results" | "failed";
 
 export interface LineageRecord {
-  version: 1;
+  version: 2;
   sessionId: string;
   sdkAgentId: string;
   credentialFingerprint: string;
   modelId: string;
   modelParams?: Array<{ id: string; value: string }>;
+  sessionPolicyFingerprint: string;
+  executableToolCatalogFingerprint: string;
   state: LineageState;
   pendingToolIds: string[];
   pendingCalls?: Array<{ toolUseId: string; name: string }>;
@@ -174,11 +176,23 @@ export class LineageStore {
 function isLineageRecord(value: unknown): value is LineageRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  if (record.version !== 1) return false;
+  if (record.version !== 2) return false;
   if (typeof record.sessionId !== "string" || !SESSION_ID_RE.test(record.sessionId)) return false;
   if (typeof record.sdkAgentId !== "string" || !record.sdkAgentId) return false;
   if (typeof record.credentialFingerprint !== "string" || !record.credentialFingerprint) return false;
   if (typeof record.modelId !== "string" || !record.modelId) return false;
+  if (
+    typeof record.sessionPolicyFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(record.sessionPolicyFingerprint)
+  ) {
+    return false;
+  }
+  if (
+    typeof record.executableToolCatalogFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(record.executableToolCatalogFingerprint)
+  ) {
+    return false;
+  }
   if (
     record.modelParams !== undefined &&
     (!Array.isArray(record.modelParams) ||

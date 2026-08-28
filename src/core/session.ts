@@ -40,6 +40,8 @@ export class Session {
   readonly credentialFingerprint: string;
   readonly modelId: string;
   readonly modelParams: Array<{ id: string; value: string }>;
+  readonly sessionPolicyFingerprint: string;
+  readonly executableToolCatalogFingerprint: string;
   readonly instanceId: string;
   readonly createdAt: number;
   lastActivityAt: number;
@@ -65,6 +67,8 @@ export class Session {
     credentialFingerprint: string;
     modelId: string;
     modelParams?: Array<{ id: string; value: string }>;
+    sessionPolicyFingerprint: string;
+    executableToolCatalogFingerprint: string;
     instanceId: string;
     clock: Clock;
     sessionId?: string;
@@ -73,6 +77,8 @@ export class Session {
     this.credentialFingerprint = input.credentialFingerprint;
     this.modelId = input.modelId;
     this.modelParams = [...(input.modelParams ?? [])];
+    this.sessionPolicyFingerprint = input.sessionPolicyFingerprint;
+    this.executableToolCatalogFingerprint = input.executableToolCatalogFingerprint;
     this.instanceId = input.instanceId;
     this.createdAt = input.clock.now();
     this.lastActivityAt = this.createdAt;

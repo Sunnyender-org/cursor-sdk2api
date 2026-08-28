@@ -29,6 +29,8 @@ export class SessionRegistry {
     credentialFingerprint: string;
     modelId: string;
     modelParams?: Array<{ id: string; value: string }>;
+    sessionPolicyFingerprint: string;
+    executableToolCatalogFingerprint: string;
   }): Session {
     this.assertCanActivateRun({ credentialFingerprint: input.credentialFingerprint });
     const awaiting = [...this.sessions.values()].filter((session) => session.state === "awaiting_tool_results");

@@ -225,11 +225,18 @@ test("drain rejects completed follow-up but still accepts awaiting tool_result",
 test("adopt refuses to replace a different live session", async () => {
   const ctx = await startTestApp();
   apps.push(ctx);
-  const live = ctx.app.registry.create({ credentialFingerprint: "fp", modelId: "composer-2.5" });
+  const live = ctx.app.registry.create({
+    credentialFingerprint: "fp",
+    modelId: "composer-2.5",
+    sessionPolicyFingerprint: "a".repeat(64),
+    executableToolCatalogFingerprint: "b".repeat(64),
+  });
   const other = new Session({
     sessionId: live.sessionId,
     credentialFingerprint: "fp",
     modelId: "composer-2.5",
+    sessionPolicyFingerprint: "a".repeat(64),
+    executableToolCatalogFingerprint: "b".repeat(64),
     instanceId: ctx.app.registry.instanceId,
     clock: ctx.clock,
   });

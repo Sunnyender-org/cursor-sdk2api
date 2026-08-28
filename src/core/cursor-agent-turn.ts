@@ -7,6 +7,10 @@ import type {
   ParsedMessages,
 } from "../protocols/anthropic/types.js";
 import type { ToolChoicePolicy } from "../protocols/tool-choice.js";
+import {
+  normalizeModelParams,
+  sessionPolicyFingerprintFromParsed,
+} from "./session-policy.js";
 
 export const CURSOR_AGENT_TURN_VERSION = 1;
 export const CURSOR_AGENT_ROUTE = "cursor-agent";
@@ -34,6 +38,7 @@ export interface CursorAgentTurn {
     parentAssistantAnchor: string;
     turnIndex: number;
     toolCatalogDigest: string;
+    sessionPolicyFingerprint: string;
   };
 }
 
@@ -41,7 +46,7 @@ export function effectiveCursorModel(
   model: string,
   modelParams: Array<{ id: string; value: string }>,
 ): string {
-  return `${model}|${stableStringify(modelParams)}`;
+  return `${model}|${stableStringify(normalizeModelParams(modelParams))}`;
 }
 
 export function serializedContent(content: unknown): string {
@@ -207,6 +212,7 @@ export function cursorAgentTurnFromParsed(
       parentAssistantAnchor: parent ? digestAssistantAnchor(parent.content) : "",
       turnIndex,
       toolCatalogDigest,
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
     },
   };
   turn.lineage.requestDigest = digestCursorAgentTurnRequest(turn);

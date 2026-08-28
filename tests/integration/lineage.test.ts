@@ -245,11 +245,13 @@ test("lineage files are owner-only and expire", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-lineage-"));
   const store = new LineageStore(stateDir, clock);
   store.put({
-    version: 1,
+    version: 2,
     sessionId: "ses_perm",
     sdkAgentId: "agent-1",
     credentialFingerprint: "fp",
     modelId: "composer-2.5",
+    sessionPolicyFingerprint: "a".repeat(64),
+    executableToolCatalogFingerprint: "b".repeat(64),
     state: "completed",
     pendingToolIds: [],
     createdAt: 5_000,

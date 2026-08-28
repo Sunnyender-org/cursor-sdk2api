@@ -95,6 +95,7 @@ export function decideOrdinaryTurn(input: {
       parent.tenantScope !== turn.tenantScope ||
       parent.effectiveModel !== turn.effectiveModel ||
       parent.toolCatalogDigest !== turn.lineage.toolCatalogDigest ||
+      parent.sessionPolicyFingerprint !== turn.lineage.sessionPolicyFingerprint ||
       Number(parent.channelId || 0) !== Number(turn.channelId || 0)
     ) {
       return { action: "rebuild", reason: "lineage_mismatch", record: parent };

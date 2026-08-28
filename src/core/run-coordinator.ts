@@ -36,6 +36,10 @@ import { batchDigest, mapClientTools } from "./tool-bridge.js";
 import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
 import type { TurnWriter, TurnWriterFactory, TurnWriterSession } from "./turn-writer.js";
+import {
+  executableToolCatalogFingerprint,
+  sessionPolicyFingerprintFromParsed,
+} from "./session-policy.js";
 
 interface OrdinaryReplayEntry {
   turn: NonNullable<Session["replay"]>["turn"];
@@ -69,7 +73,14 @@ function sameModelParams(
   right: Array<{ id: string; value: string }>,
 ): boolean {
   if (left.length !== right.length) return false;
-  return left.every((item, index) => item.id === right[index]?.id && item.value === right[index]?.value);
+  const normalized = (items: Array<{ id: string; value: string }>) =>
+    [...items].sort((a, b) => a.id.localeCompare(b.id) || a.value.localeCompare(b.value));
+  const normalizedLeft = normalized(left);
+  const normalizedRight = normalized(right);
+  return normalizedLeft.every(
+    (item, index) =>
+      item.id === normalizedRight[index]?.id && item.value === normalizedRight[index]?.value,
+  );
 }
 
 export class RunCoordinator {
@@ -284,6 +295,7 @@ export class RunCoordinator {
       parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
       turnIndex: turn.lineage.turnIndex,
       toolCatalogDigest: turn.lineage.toolCatalogDigest,
+      sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
       assistantAnchor: "",
       agentId: claim.mode === "resume" ? claim.parent.agentId : "",
       credentialFingerprint: auth.fingerprint,
@@ -333,6 +345,7 @@ export class RunCoordinator {
         live.state === "completed" &&
         live.credentialFingerprint === auth.fingerprint &&
         live.modelId === parsed.model &&
+        live.sessionPolicyFingerprint === turn.lineage.sessionPolicyFingerprint &&
         claim.parent.credentialFingerprint === auth.fingerprint
       ) {
         live.ordinaryTurn = turn;
@@ -396,6 +409,9 @@ export class RunCoordinator {
     requestId: string,
     writerFactory: TurnWriterFactory,
   ): Promise<void> {
+    if (parent.sessionPolicyFingerprint !== turn.lineage.sessionPolicyFingerprint) {
+      throw sessionConflict("session policy does not match the ordinary-turn owner");
+    }
     this.deps.registry.assertCanActivateRun({
       credentialFingerprint: auth.fingerprint,
     });
@@ -403,6 +419,8 @@ export class RunCoordinator {
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
+      sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
+      executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
     session.ordinaryTurn = turn;
     try {
@@ -492,6 +510,7 @@ export class RunCoordinator {
       parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
       turnIndex: turn.lineage.turnIndex,
       toolCatalogDigest: turn.lineage.toolCatalogDigest,
+      sessionPolicyFingerprint: session.sessionPolicyFingerprint,
       assistantAnchor,
       agentId: session.sdkAgentId ?? session.agent?.agentId ?? "",
       credentialFingerprint: session.credentialFingerprint,
@@ -530,6 +549,8 @@ export class RunCoordinator {
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
+      executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
     if (ordinaryTurn) session.ordinaryTurn = ordinaryTurn;
     try {
@@ -560,7 +581,7 @@ export class RunCoordinator {
     writerFactory: TurnWriterFactory,
     sendOverride?: { text: string; images: Array<{ data: string; mimeType: string }> },
   ): Promise<void> {
-    this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
+    this.assertIdentity(session, auth, parsed);
     if (!session.agent) {
       throw sessionLost("Session cannot accept a follow-up send");
     }
@@ -619,6 +640,18 @@ export class RunCoordinator {
       routingError = invalidRequest(`unknown tool_use_id: ${lookup.missing.join(",")}`);
     }
     if (!lookup.mixed && lookup.session && lookup.missing.length === 0) {
+      const effectiveParams =
+        parsed.modelParams.length > 0 ? parsed.modelParams : lookup.session.modelParams;
+      if (parsed.modelParams.length > 0 && !sameModelParams(lookup.session.modelParams, effectiveParams)) {
+        throw sessionConflict("model parameters do not match the live pending session");
+      }
+      if (
+        parsed.tools.length > 0 &&
+        lookup.session.executableToolCatalogFingerprint !==
+          executableToolCatalogFingerprint(parsed.tools)
+      ) {
+        throw sessionConflict("session policy does not match the live pending session");
+      }
       try {
         await this.continueLiveSession(req, res, auth, parsed, results, lookup.session, requestId, writerFactory);
         return;
@@ -630,6 +663,18 @@ export class RunCoordinator {
     if (!lookup.mixed && !lookup.session) {
       const recorded = this.deps.lineage?.findByToolIds(ids);
       if (recorded) {
+        const effectiveParams =
+          parsed.modelParams.length > 0 ? parsed.modelParams : recorded.modelParams ?? [];
+        if (parsed.modelParams.length > 0 && !sameModelParams(recorded.modelParams ?? [], effectiveParams)) {
+          throw sessionConflict("model parameters do not match the stored pending session");
+        }
+        if (
+          parsed.tools.length > 0 &&
+          recorded.executableToolCatalogFingerprint !==
+            executableToolCatalogFingerprint(parsed.tools)
+        ) {
+          throw sessionConflict("session policy does not match the stored pending session");
+        }
         try {
           await this.resumePendingLineage(
             req,
@@ -663,7 +708,7 @@ export class RunCoordinator {
   ): Promise<void> {
     const ids = results.map((result) => result.toolUseId);
     this.deps.registry.requireLive(session, ids);
-    this.assertIdentity(session, auth, parsed.model, parsed.modelParams);
+    this.assertPendingIdentity(session, auth, parsed);
 
     const digest = batchDigest(results);
     if (session.lastResultDigest && session.lastResultDigest !== digest) {
@@ -765,6 +810,8 @@ export class RunCoordinator {
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
+      executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
     session.lastResultDigest = batchDigest(results);
     try {
@@ -851,6 +898,8 @@ export class RunCoordinator {
       credentialFingerprint: record.credentialFingerprint,
       modelId: record.modelId,
       modelParams: record.modelParams,
+      sessionPolicyFingerprint: record.sessionPolicyFingerprint,
+      executableToolCatalogFingerprint: record.executableToolCatalogFingerprint,
       instanceId: this.deps.registry.instanceId,
       clock: this.deps.clock,
     });
@@ -984,6 +1033,10 @@ export class RunCoordinator {
     if (record.credentialFingerprint !== auth.fingerprint || record.modelId !== parsed.model) {
       throw sessionConflict("credential or model does not match the stored session");
     }
+    const effectiveParams = parsed.modelParams.length > 0 ? parsed.modelParams : record.modelParams ?? [];
+    if (record.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams)) {
+      throw sessionConflict("session policy does not match the stored session");
+    }
     if (parsed.modelParams.length > 0 && !sameModelParams(record.modelParams ?? [], parsed.modelParams)) {
       throw sessionConflict("model parameters do not match the stored session");
     }
@@ -998,6 +1051,8 @@ export class RunCoordinator {
       credentialFingerprint: record.credentialFingerprint,
       modelId: record.modelId,
       modelParams: record.modelParams,
+      sessionPolicyFingerprint: record.sessionPolicyFingerprint,
+      executableToolCatalogFingerprint: record.executableToolCatalogFingerprint,
       instanceId: this.deps.registry.instanceId,
       clock: this.deps.clock,
     });
@@ -1034,12 +1089,14 @@ export class RunCoordinator {
     const ttl =
       session.state === "failed" ? this.deps.config.replayTtlMs : this.deps.config.sessionTtlMs;
     const record: LineageRecord = {
-      version: 1,
+      version: 2,
       sessionId: session.sessionId,
       sdkAgentId,
       credentialFingerprint: session.credentialFingerprint,
       modelId: session.modelId,
       ...(session.modelParams.length > 0 ? { modelParams: session.modelParams } : {}),
+      sessionPolicyFingerprint: session.sessionPolicyFingerprint,
+      executableToolCatalogFingerprint: session.executableToolCatalogFingerprint,
       state: session.state as LineageRecord["state"],
       pendingToolIds:
         session.state === "awaiting_tool_results" ? [...session.pending.keys()] : [],
@@ -1087,16 +1144,41 @@ export class RunCoordinator {
   private assertIdentity(
     session: Session,
     auth: AuthContext,
-    model: string,
-    requestedParams: Array<{ id: string; value: string }>,
+    parsed: ParsedMessages,
+  ): void {
+    this.assertModelIdentity(session, auth, parsed);
+    const effectiveParams = parsed.modelParams.length > 0 ? parsed.modelParams : session.modelParams;
+    if (session.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams)) {
+      throw sessionConflict("session policy does not match the session owner");
+    }
+  }
+
+  private assertPendingIdentity(
+    session: Session,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+  ): void {
+    this.assertModelIdentity(session, auth, parsed);
+    if (
+      parsed.tools.length > 0 &&
+      session.executableToolCatalogFingerprint !== executableToolCatalogFingerprint(parsed.tools)
+    ) {
+      throw sessionConflict("tool catalog does not match the pending session owner");
+    }
+  }
+
+  private assertModelIdentity(
+    session: Session,
+    auth: AuthContext,
+    parsed: ParsedMessages,
   ): void {
     if (session.credentialFingerprint !== auth.fingerprint) {
       throw sessionConflict("credential identity does not match the session owner");
     }
-    if (session.modelId !== model) {
+    if (session.modelId !== parsed.model) {
       throw sessionConflict("model does not match the session owner");
     }
-    if (requestedParams.length > 0 && !sameModelParams(session.modelParams, requestedParams)) {
+    if (parsed.modelParams.length > 0 && !sameModelParams(session.modelParams, parsed.modelParams)) {
       throw sessionConflict("model parameters do not match the session owner");
     }
     if (session.instanceId !== this.deps.registry.instanceId) {
