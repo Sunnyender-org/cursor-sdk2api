@@ -584,9 +584,6 @@ export class RunCoordinator {
     options: FollowUpOptions = {},
   ): Promise<void> {
     this.assertIdentity(session, auth, parsed);
-    if (!session.ordinaryReplayOwner) {
-      this.beginOrdinaryReplaySegment(session, auth, parsed);
-    }
     const agentSource = options.agent ?? (session.agent
       ? { type: "existing" as const, agent: session.agent }
       : undefined);

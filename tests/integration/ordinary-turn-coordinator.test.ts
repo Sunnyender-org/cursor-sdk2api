@@ -54,6 +54,54 @@ test("exact ordinary next turn reuses one Agent and sends only current text", as
   expect(ctx.sdk.agents[0]?.lastSend?.text).not.toContain("hello");
 });
 
+test("an explicit session follow-up never seeds headerless ordinary replay", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      agentScripts: [
+        [
+          [{ type: "text", chunks: ["first"] }],
+          [{ type: "text", chunks: ["contextual"] }],
+        ],
+        [[{ type: "text", chunks: ["fresh"] }]],
+      ],
+    },
+  });
+  const first = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  });
+  expect(first.status).toBe(200);
+  const sessionId = first.headers.get("x-cursor-session-id");
+  expect(sessionId).toMatch(/^ses_/);
+
+  const minimal = {
+    model: "composer-2.5",
+    max_tokens: 16,
+    messages: [{ role: "user", content: "same" }],
+  };
+  const contextual = await api(ctx, "/v1/messages", {
+    method: "POST",
+    headers: { "x-cursor-session-id": sessionId as string },
+    body: JSON.stringify(minimal),
+  });
+  const contextualBody = (await contextual.json()) as { content: Array<{ text?: string }> };
+  expect(contextual.status).toBe(200);
+  expect(contextualBody.content[0]?.text).toBe("contextual");
+
+  const headerless = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(minimal),
+  });
+  const headerlessBody = (await headerless.json()) as { content: Array<{ text?: string }> };
+  expect(headerless.status).toBe(200);
+  expect(headerlessBody.content[0]?.text).toBe("fresh");
+  expect(ctx.sdk.createCalls).toHaveLength(2);
+});
+
 test("reused Agent publishes a tool called synchronously during follow-up send", async () => {
   ctx = await startTestApp({
     config: { firstEventTimeoutMs: 25 },
