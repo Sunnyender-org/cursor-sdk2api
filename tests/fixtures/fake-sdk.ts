@@ -44,6 +44,8 @@ export interface FakeSdkOptions {
   createErrorsByApiKey?: Record<string, { message: string; name?: string } | Array<{ message: string; name?: string }>>;
   credentialProbeByApiKey?: Record<string, "valid" | "invalid" | "unavailable">;
   resumeError?: { message: string; name?: string };
+  /** Invoke these custom tools synchronously inside resumeAgent(), before the Agent is returned. */
+  resumeEarlyToolCalls?: Array<{ name: string; input: Record<string, unknown>; id?: string }>;
 }
 
 function configuredError(input: { message: string; name?: string }): Error {
@@ -371,6 +373,13 @@ export class FakeSdk implements SdkRuntime {
     this.lastResume = input;
     this.resumeCalls.push(input);
     this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames);
+    for (const call of this.options.resumeEarlyToolCalls ?? []) {
+      const tool = input.customTools[call.name];
+      if (!tool) throw new Error(`fake sdk missing resume tool ${call.name}`);
+      void Promise.resolve(
+        tool.execute(call.input, { toolCallId: call.id ?? `sdk_${randomUUID()}` }),
+      ).catch(() => undefined);
+    }
     const agent = new FakeAgent(
       input,
       this.takeScripts([[{ type: "text", chunks: ["resumed"] }]]),

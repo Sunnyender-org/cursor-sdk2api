@@ -28,6 +28,8 @@ Text/thinking streaming uses official `SendOptions.onDelta` (`text-delta` / `thi
 
 `customTool.execute` is the authority for client-visible `tool_use`. SDK `tool_call` stream events are diagnostic and are de-duplicated by call id.
 
+`SdkRunDriver` maps one custom-tool table before Agent create/resume and carries that same table through `send()` and EventPump attachment. Tool callbacks that fire synchronously during Agent resume or send are queued on the Session and drained only after the pump is attached; the coordinator never remaps tools or calls `Agent.resume` directly.
+
 ## Network transport
 
 Direct local SDK runs retain the official HTTP/2 transport. Node does not apply

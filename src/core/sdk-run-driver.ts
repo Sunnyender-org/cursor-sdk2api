@@ -10,7 +10,7 @@ import { EventPump } from "./event-pump.js";
 import type { Session } from "./session.js";
 import { mapClientTools } from "./tool-bridge.js";
 
-type AgentSource =
+export type SdkAgentSource =
   | { type: "create"; apiKey: string; workspaceDir: string }
   | { type: "resume"; agentId: string; apiKey: string; workspaceDir: string }
   | { type: "existing"; agent: SdkAgent };
@@ -18,13 +18,14 @@ type AgentSource =
 export interface DriveSdkRunInput {
   session: Session;
   tools: AnthropicTool[];
-  agent: AgentSource;
+  agent: SdkAgentSource;
   send: {
     text: string;
     images?: Array<{ data: string; mimeType: string }>;
     force?: boolean;
   };
   completedResults?: Map<string, SdkCustomToolResult[]>;
+  afterAgentReady?: (agent: SdkAgent) => void;
 }
 
 export interface SdkRunDriverDeps {
@@ -74,6 +75,7 @@ export class SdkRunDriver {
     const agent = await this.resolveAgent(input, customTools);
     session.agent = agent;
     session.sdkAgentId = agent.agentId;
+    input.afterAgentReady?.(agent);
 
     const deltas = createDeltaBridge();
     const run = await agent.send({

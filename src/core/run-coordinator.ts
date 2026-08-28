@@ -31,8 +31,8 @@ import { decideOrdinaryTurn } from "./ordinary-turn.js";
 import type { OrdinaryTurnJournal, OrdinaryTurnRecord } from "./ordinary-turn-journal.js";
 import { Session } from "./session.js";
 import { SessionRegistry } from "./session-registry.js";
-import { SdkRunDriver } from "./sdk-run-driver.js";
-import { batchDigest, mapClientTools } from "./tool-bridge.js";
+import { SdkRunDriver, type SdkAgentSource } from "./sdk-run-driver.js";
+import { batchDigest } from "./tool-bridge.js";
 import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
 import type { TurnWriter, TurnWriterFactory, TurnWriterSession } from "./turn-writer.js";
@@ -45,6 +45,13 @@ interface OrdinaryReplayEntry {
   turn: NonNullable<Session["replay"]>["turn"];
   writerSession: TurnWriterSession;
   expiresAt: number;
+}
+
+interface FollowUpOptions {
+  send?: { text: string; images: Array<{ data: string; mimeType: string }> };
+  agent?: SdkAgentSource;
+  afterAgentReady?: () => void;
+  failureReason?: string;
 }
 
 export interface CoordinatorDeps {
@@ -363,7 +370,7 @@ export class RunCoordinator {
           live,
           requestId,
           writerFactory,
-          currentTurnSendPayload(turn),
+          { send: currentTurnSendPayload(turn) },
         );
         return;
       }
@@ -423,39 +430,33 @@ export class RunCoordinator {
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
     session.ordinaryReplayOwner = turn;
-    try {
-      const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
-      const agent = await this.deps.sdk.resumeAgent({
-        agentId: parent.agentId,
-        apiKey: auth.cursorApiKey,
-        modelId: parsed.model,
-        modelParams: session.modelParams,
-        workspaceDir: this.deps.workspaceDir,
-        clientToolNames: parsed.tools.map((tool) => tool.name),
-        customTools,
-      });
-      session.agent = agent;
-      session.sdkAgentId = parent.agentId;
-      this.traceOrdinary({
-        action: "resume",
-        reason: "exact_successor_store",
-        model: parsed.model,
-        send_chars: currentTurnSendPayload(turn).text.length,
-      });
-      await this.followUp(
-        req,
-        res,
-        auth,
-        parsed,
-        session,
-        requestId,
-        writerFactory,
-        currentTurnSendPayload(turn),
-      );
-    } catch (error) {
-      if (!res.headersSent) this.deps.registry.forget(session, "ordinary_resume_failed");
-      throw sdkFailure(error);
-    }
+    await this.followUp(
+      req,
+      res,
+      auth,
+      parsed,
+      session,
+      requestId,
+      writerFactory,
+      {
+        send: currentTurnSendPayload(turn),
+        agent: {
+          type: "resume",
+          agentId: parent.agentId,
+          apiKey: auth.cursorApiKey,
+          workspaceDir: this.deps.workspaceDir,
+        },
+        afterAgentReady: () => {
+          this.traceOrdinary({
+            action: "resume",
+            reason: "exact_successor_store",
+            model: parsed.model,
+            send_chars: currentTurnSendPayload(turn).text.length,
+          });
+        },
+        failureReason: "ordinary_resume_failed",
+      },
+    );
   }
 
   private traceOrdinary(event: {
@@ -580,13 +581,16 @@ export class RunCoordinator {
     session: Session,
     requestId: string,
     writerFactory: TurnWriterFactory,
-    sendOverride?: { text: string; images: Array<{ data: string; mimeType: string }> },
+    options: FollowUpOptions = {},
   ): Promise<void> {
     this.assertIdentity(session, auth, parsed);
     if (!session.ordinaryReplayOwner) {
       this.beginOrdinaryReplaySegment(session, auth, parsed);
     }
-    if (!session.agent) {
+    const agentSource = options.agent ?? (session.agent
+      ? { type: "existing" as const, agent: session.agent }
+      : undefined);
+    if (!agentSource) {
       throw sessionLost("Session cannot accept a follow-up send");
     }
     if (session.state !== "completed" && session.state !== "creating") {
@@ -605,17 +609,18 @@ export class RunCoordinator {
     session.lastResultDigest = undefined;
     session.replay = undefined;
     session.appliedBoundaryId = undefined;
-    const prompt = sendOverride ?? renderPrompt(parsed);
+    const prompt = options.send ?? renderPrompt(parsed);
     try {
       const pump = await this.sdkRunDriver.start({
         session,
         tools: parsed.tools,
-        agent: { type: "existing", agent: session.agent },
+        agent: agentSource,
         send: prompt,
+        afterAgentReady: options.afterAgentReady,
       });
       await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
     } catch (error) {
-      if (!res.headersSent) this.deps.registry.forget(session, "follow_up_failed");
+      if (!res.headersSent) this.deps.registry.forget(session, options.failureReason ?? "follow_up_failed");
       throw sdkFailure(error);
     }
   }
@@ -1064,26 +1069,15 @@ export class RunCoordinator {
       clock: this.deps.clock,
     });
     this.deps.registry.adopt(session);
-    try {
-      const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
-      const agent = await this.deps.sdk.resumeAgent({
+    await this.followUp(req, res, auth, parsed, session, requestId, writerFactory, {
+      agent: {
+        type: "resume",
         agentId: record.sdkAgentId,
         apiKey: auth.cursorApiKey,
-        modelId: parsed.model,
-        modelParams: session.modelParams,
         workspaceDir: this.deps.workspaceDir,
-        clientToolNames: parsed.tools.map((tool) => tool.name),
-        customTools,
-      });
-      session.agent = agent;
-      session.sdkAgentId = record.sdkAgentId;
-      await this.followUp(req, res, auth, parsed, session, requestId, writerFactory);
-    } catch (error) {
-      if (!res.headersSent) {
-        this.deps.registry.forget(session, "resume_failed");
-      }
-      throw sdkFailure(error);
-    }
+      },
+      failureReason: "resume_failed",
+    });
   }
 
   private persistLineage(session: Session): void {

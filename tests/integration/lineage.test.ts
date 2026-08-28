@@ -80,6 +80,57 @@ test("completed follow-up after process restart resumes the SDK agent", async ()
   expect(app2.sdk.lastCreate).toBeUndefined();
 });
 
+test("completed lineage resume preserves a tool callback fired inside resumeAgent", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-lineage-"));
+  const app1 = await startTestApp({
+    config: { stateDir },
+    sdk: { scripts: [[{ type: "text", chunks: ["first"] }]] },
+  });
+  apps.push(app1);
+  const first = await api(app1, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+      tools: [weatherTool()],
+    }),
+  });
+  const sessionId = ((await first.json()) as { cursor_session_id: string }).cursor_session_id;
+  await closeTestApp(app1);
+  apps.pop();
+
+  const app2 = await startTestApp({
+    config: { stateDir, firstEventTimeoutMs: 25 },
+    sdk: {
+      scripts: [[{ type: "hang" }]],
+      resumeEarlyToolCalls: [
+        { name: "lookup", input: { q: "weather" }, id: "completed_lineage_early" },
+      ],
+    },
+  });
+  apps.push(app2);
+  const follow = await api(app2, "/v1/messages", {
+    method: "POST",
+    headers: { "x-cursor-session-id": sessionId },
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "use the tool" }],
+      tools: [weatherTool()],
+    }),
+  });
+  const body = (await follow.json()) as { content: Array<{ type: string; id?: string; name?: string }> };
+
+  expect(follow.status).toBe(200);
+  expect(body.content).toContainEqual(expect.objectContaining({
+    type: "tool_use",
+    id: "completed_lineage_early",
+    name: "lookup",
+  }));
+  expect(app2.sdk.lastResume?.customTools).toBe(app2.sdk.agents[0]?.lastSend?.customTools);
+});
+
 test("lineage follow-up rejects credential and model mismatch", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-lineage-"));
   const app1 = await startTestApp({

@@ -468,6 +468,48 @@ test("process restart resumes the persisted Agent and sends only the current tur
   expect(ctx.sdk.agents[0]?.lastSend?.text).toBe("next");
 });
 
+test("persisted ordinary resume preserves a tool callback fired inside resumeAgent", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-ordinary-"));
+  const firstApp = await startTestApp({
+    config: { stateDir },
+    sdk: { scripts: [[{ type: "text", chunks: ["first"] }]] },
+  });
+  const first = await api(firstApp, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+      tools: [weatherTool()],
+    }),
+  });
+  const assistant = ((await first.json()) as { content: Array<{ text?: string }> }).content[0]?.text ?? "first";
+  await closeTestApp(firstApp);
+
+  ctx = await startTestApp({
+    config: { stateDir, firstEventTimeoutMs: 25 },
+    sdk: {
+      scripts: [[{ type: "hang" }]],
+      resumeEarlyToolCalls: [
+        { name: "lookup", input: { q: "weather" }, id: "persisted_ordinary_early" },
+      ],
+    },
+  });
+  const follow = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(followBody(assistant, "use the tool", { tools: [weatherTool()] })),
+  });
+  const body = (await follow.json()) as { content: Array<{ type: string; id?: string; name?: string }> };
+
+  expect(follow.status).toBe(200);
+  expect(body.content).toContainEqual(expect.objectContaining({
+    type: "tool_use",
+    id: "persisted_ordinary_early",
+    name: "lookup",
+  }));
+  expect(ctx.sdk.lastResume?.customTools).toBe(ctx.sdk.agents[0]?.lastSend?.customTools);
+});
+
 test("Responses exact successor sends only the current turn", async () => {
   ctx = await startTestApp({
     sdk: {
