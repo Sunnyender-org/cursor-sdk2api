@@ -365,6 +365,6 @@ test("lineage expiry blocks follow-up after TTL", async () => {
 test("createCursorRuntime opens JsonlLocalAgentStore under STATE_DIR", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "cursor-sdk2api-sdk-store-"));
   const runtime = createCursorRuntime({ stateDir });
-  expect(runtime.sdkVersion).toMatch(/1\.0\./);
+  expect(runtime.sdkVersion).toBe("1.0.30");
   expect(existsSync(join(stateDir, "sdk-store"))).toBe(true);
 });

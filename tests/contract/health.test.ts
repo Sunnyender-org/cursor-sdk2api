@@ -41,7 +41,7 @@ test("health reports runtime capability truth without account data", async () =>
   };
   expect(body.status).toBe("ok");
   expect(body.service).toBe("cursor-sdk2api");
-  expect(body.sdk_version).toBe("1.0.28");
+  expect(body.sdk_version).toBe("1.0.30");
   expect(body.runtime).toBe("local");
   expect(body.network).toEqual({
     proxy_configured: ctx.app.config.proxyConfigured,

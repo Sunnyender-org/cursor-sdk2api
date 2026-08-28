@@ -38,7 +38,7 @@ function readSdkVersion(): string {
   } catch {
     // fall through
   }
-  return "1.0.28";
+  return "1.0.30";
 }
 
 function mapUsage(raw: unknown): SdkUsage | undefined {

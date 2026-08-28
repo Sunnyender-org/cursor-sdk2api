@@ -324,7 +324,7 @@ export class FakeSdk implements SdkRuntime {
   readonly credentialProbeCalls: string[] = [];
 
   constructor(private readonly options: FakeSdkOptions = {}) {
-    this.sdkVersion = options.sdkVersion ?? "1.0.28";
+    this.sdkVersion = options.sdkVersion ?? "1.0.30";
     this.models = options.models ?? {
       ok: true,
       models: [{ id: "composer-2.5", displayName: "Composer 2.5" }],

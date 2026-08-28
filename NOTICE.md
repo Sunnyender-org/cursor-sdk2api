@@ -26,9 +26,9 @@ BF Labs UI, Copyright (c) 2026 BF Labs, used under the MIT License. The copied s
 maintained in this repository so the standalone gateway does not require a private package
 registry at runtime or build time.
 
-## Known production audit findings (2026-08-15)
+## Known production audit findings (2026-08-28)
 
-`npm audit --omit=dev` on `@cursor/sdk@1.0.28`:
+`npm audit --omit=dev` on `@cursor/sdk@1.0.30`:
 
 | Package | Severity | Notes |
 |---|---|---|
@@ -36,4 +36,4 @@ registry at runtime or build time.
 | `@connectrpc/connect-node` | moderate | Depends on the vulnerable `undici` range. `fixAvailable: false`. |
 | `@cursor/sdk` | moderate | Depends on `@connectrpc/connect-node`. `fixAvailable: false`. |
 
-These are accepted SDK-tree risks for v0.1. Do not run `npm audit fix --force`. Re-check on the next exact SDK pin.
+These are accepted SDK-tree risks for the current exact SDK pin. Do not run `npm audit fix --force`. Re-check on the next exact SDK pin.
