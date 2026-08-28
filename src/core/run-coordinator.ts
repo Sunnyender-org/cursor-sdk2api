@@ -16,7 +16,7 @@ import type { Logger } from "../log.js";
 import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/types.js";
 import { renderPrompt } from "../protocols/anthropic/parse.js";
 import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
-import type { SdkDeltaUpdate, SdkRuntime } from "../sdk/port.js";
+import type { SdkRuntime } from "../sdk/port.js";
 import {
   currentTurnSendPayload,
   cursorAgentTurnFromParsed,
@@ -31,6 +31,7 @@ import { decideOrdinaryTurn } from "./ordinary-turn.js";
 import type { OrdinaryTurnJournal, OrdinaryTurnRecord } from "./ordinary-turn-journal.js";
 import { Session } from "./session.js";
 import { SessionRegistry } from "./session-registry.js";
+import { SdkRunDriver } from "./sdk-run-driver.js";
 import { batchDigest, mapClientTools } from "./tool-bridge.js";
 import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
@@ -71,29 +72,6 @@ function sameModelParams(
   return left.every((item, index) => item.id === right[index]?.id && item.value === right[index]?.value);
 }
 
-function createDeltaBridge() {
-  const early: SdkDeltaUpdate[] = [];
-  let pump: EventPump | undefined;
-  const ingest = (update: SdkDeltaUpdate) => {
-    early.push(update);
-    flush();
-  };
-  const flush = () => {
-    if (!pump) return;
-    while (early.length > 0) {
-      const next = early.shift();
-      if (next) pump.ingestDelta(next);
-    }
-  };
-  return {
-    ingest,
-    attach(next: EventPump) {
-      pump = next;
-      flush();
-    },
-  };
-}
-
 export class RunCoordinator {
   private readonly pendingRecoveries = new Map<
     string,
@@ -105,8 +83,15 @@ export class RunCoordinator {
   >();
   private readonly ordinaryInflight = new Map<string, Promise<void>>();
   private readonly ordinaryReplay = new Map<string, OrdinaryReplayEntry>();
+  private readonly sdkRunDriver: SdkRunDriver;
 
   constructor(private readonly deps: CoordinatorDeps) {
+    this.sdkRunDriver = new SdkRunDriver({
+      sdk: deps.sdk,
+      clock: deps.clock,
+      toolBatchSettleMs: deps.config.toolBatchSettleMs,
+      firstEventTimeoutMs: deps.config.firstEventTimeoutMs,
+    });
     this.deps.ordinaryJournal?.setOnExpire((record) => {
       const session = this.findSessionByAgentId(record.agentId);
       if (session) this.deps.registry.forget(session, "ordinary_turn_expired");
@@ -547,38 +532,15 @@ export class RunCoordinator {
       modelParams: parsed.modelParams,
     });
     if (ordinaryTurn) session.ordinaryTurn = ordinaryTurn;
-    const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
     try {
-      const agent = await this.deps.sdk.createAgent({
-        apiKey: auth.cursorApiKey,
-        modelId: parsed.model,
-        modelParams: session.modelParams,
-        workspaceDir: this.deps.workspaceDir,
-        clientToolNames: parsed.tools.map((tool) => tool.name),
-        customTools,
-      });
-      session.agent = agent;
-      session.sdkAgentId = agent.agentId;
-      session.state = "running";
       const prompt = sendOverride ?? renderPrompt(parsed);
-      const deltas = createDeltaBridge();
-      const run = await agent.send({
-        text: prompt.text,
-        images: prompt.images,
-        customTools,
-        onDelta: deltas.ingest,
-      });
-      session.run = run;
-      const pump = new EventPump(
+      const pump = await this.sdkRunDriver.start({
         session,
-        run,
-        this.deps.clock,
-        this.deps.config.toolBatchSettleMs,
-        this.deps.config.firstEventTimeoutMs,
-      );
-      session.pump = pump;
-      deltas.attach(pump);
-      pump.ingestEarly(session.earlyCalls.splice(0));
+        tools: parsed.tools,
+        agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.deps.workspaceDir },
+        send: prompt,
+      });
+      session.state = "running";
       await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
     } catch (error) {
       if (!res.headersSent && session.state !== "awaiting_tool_results") {
@@ -618,26 +580,14 @@ export class RunCoordinator {
     session.lastResultDigest = undefined;
     session.replay = undefined;
     session.appliedBoundaryId = undefined;
-    const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
     const prompt = sendOverride ?? renderPrompt(parsed);
-    const deltas = createDeltaBridge();
     try {
-      const run = await session.agent.send({
-        text: prompt.text,
-        images: prompt.images,
-        customTools,
-        onDelta: deltas.ingest,
-      });
-      session.run = run;
-      const pump = new EventPump(
+      const pump = await this.sdkRunDriver.start({
         session,
-        run,
-        this.deps.clock,
-        this.deps.config.toolBatchSettleMs,
-        this.deps.config.firstEventTimeoutMs,
-      );
-      session.pump = pump;
-      deltas.attach(pump);
+        tools: parsed.tools,
+        agent: { type: "existing", agent: session.agent },
+        send: prompt,
+      });
       await this.drive(req, res, session, pump, parsed.stream, requestId, writerFactory);
     } catch (error) {
       if (!res.headersSent) this.deps.registry.forget(session, "follow_up_failed");
@@ -817,43 +767,15 @@ export class RunCoordinator {
       modelParams: parsed.modelParams,
     });
     session.lastResultDigest = batchDigest(results);
-    const customTools = mapClientTools(
-      parsed.tools,
-      session,
-      this.deps.clock,
-      () => undefined,
-      recovery.completedResults,
-    );
-    const deltas = createDeltaBridge();
     try {
-      const agent = await this.deps.sdk.createAgent({
-        apiKey: auth.cursorApiKey,
-        modelId: parsed.model,
-        modelParams: session.modelParams,
-        workspaceDir: this.deps.workspaceDir,
-        clientToolNames: parsed.tools.map((tool) => tool.name),
-        customTools,
-      });
-      session.agent = agent;
-      session.sdkAgentId = agent.agentId;
-      session.state = "running";
-      const run = await agent.send({
-        text: recovery.prompt,
-        images: parsed.images,
-        customTools,
-        onDelta: deltas.ingest,
-      });
-      session.run = run;
-      const pump = new EventPump(
+      const pump = await this.sdkRunDriver.start({
         session,
-        run,
-        this.deps.clock,
-        this.deps.config.toolBatchSettleMs,
-        this.deps.config.firstEventTimeoutMs,
-      );
-      session.pump = pump;
-      deltas.attach(pump);
-      pump.ingestEarly(session.earlyCalls.splice(0));
+        tools: parsed.tools,
+        agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.deps.workspaceDir },
+        send: { text: recovery.prompt, images: parsed.images },
+        completedResults: recovery.completedResults,
+      });
+      session.state = "running";
       return { session, pump };
     } catch (error) {
       this.deps.registry.forget(session, "transcript_recovery_failed");
@@ -936,37 +858,18 @@ export class RunCoordinator {
     session.lastResultDigest = digest;
     this.deps.registry.adopt(session);
 
-    const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
-    const deltas = createDeltaBridge();
     try {
-      const agent = await this.deps.sdk.resumeAgent({
-        agentId: record.sdkAgentId,
-        apiKey: auth.cursorApiKey,
-        modelId: parsed.model,
-        modelParams: session.modelParams,
-        workspaceDir: this.deps.workspaceDir,
-        clientToolNames: parsed.tools.map((tool) => tool.name),
-        customTools,
-      });
-      session.agent = agent;
-      session.sdkAgentId = record.sdkAgentId;
-      const run = await agent.send({
-        text: recoveredToolResultPrompt(record, results),
-        customTools,
-        force: true,
-        onDelta: deltas.ingest,
-      });
-      session.run = run;
-      const pump = new EventPump(
+      const pump = await this.sdkRunDriver.start({
         session,
-        run,
-        this.deps.clock,
-        this.deps.config.toolBatchSettleMs,
-        this.deps.config.firstEventTimeoutMs,
-      );
-      session.pump = pump;
-      deltas.attach(pump);
-      pump.ingestEarly(session.earlyCalls.splice(0));
+        tools: parsed.tools,
+        agent: {
+          type: "resume",
+          agentId: record.sdkAgentId,
+          apiKey: auth.cursorApiKey,
+          workspaceDir: this.deps.workspaceDir,
+        },
+        send: { text: recoveredToolResultPrompt(record, results), force: true },
+      });
       for (const id of record.pendingToolIds) this.deps.registry.indexTool(id, session.sessionId);
       return { session, pump };
     } catch (error) {

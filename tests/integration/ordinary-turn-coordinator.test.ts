@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { FakeClock } from "../../src/clock.js";
-import { api, closeTestApp, startTestApp, type TestContext } from "../helpers/app.js";
+import { api, closeTestApp, startTestApp, weatherTool, type TestContext } from "../helpers/app.js";
 
 let ctx: TestContext;
 
@@ -52,6 +52,46 @@ test("exact ordinary next turn reuses one Agent and sends only current text", as
   expect(ctx.sdk.agents[0]?.runs).toHaveLength(2);
   expect(ctx.sdk.agents[0]?.lastSend?.text).toBe("next");
   expect(ctx.sdk.agents[0]?.lastSend?.text).not.toContain("hello");
+});
+
+test("reused Agent publishes a tool called synchronously during follow-up send", async () => {
+  ctx = await startTestApp({
+    config: { firstEventTimeoutMs: 25 },
+    sdk: {
+      scripts: [
+        [{ type: "text", chunks: ["first"] }],
+        [
+          { type: "send-tools", calls: [{ name: "lookup", input: { q: "weather" }, id: "early_followup" }] },
+          { type: "hang" },
+        ],
+      ],
+    },
+  });
+  const first = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+      tools: [weatherTool()],
+    }),
+  });
+  const firstBody = (await first.json()) as { content: Array<{ text?: string }> };
+
+  const follow = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(followBody(firstBody.content[0]?.text ?? "first", "use the tool", {
+      tools: [weatherTool()],
+    })),
+  });
+  const body = (await follow.json()) as { content: Array<{ type: string; id?: string; name?: string }> };
+
+  expect(follow.status).toBe(200);
+  expect(body.content).toContainEqual(expect.objectContaining({
+    type: "tool_use",
+    id: "early_followup",
+    name: "lookup",
+  }));
 });
 
 test("feature flag off keeps a cold rebuild for every ordinary turn", async () => {

@@ -21,6 +21,7 @@ import {
 export type FakeStep =
   | { type: "text"; chunks: string[]; pauseBetweenMs?: number; early?: boolean }
   | { type: "thinking"; chunks: string[]; early?: boolean }
+  | { type: "send-tools"; calls: Array<{ name: string; input: Record<string, unknown>; id?: string }> }
   | { type: "tools"; calls: Array<{ name: string; input: Record<string, unknown>; id?: string; delayMs?: number }> }
   | { type: "silent-final"; text: string }
   | { type: "empty" }
@@ -276,6 +277,17 @@ export class FakeAgent implements SdkAgent {
       earlyCount,
     );
     this.runs.push(run);
+    if (first?.type === "send-tools") {
+      for (const call of first.calls) {
+        const tool = (sendInput.customTools ?? this.input.customTools)[call.name];
+        if (!tool) throw new Error(`fake sdk missing tool ${call.name}`);
+        void Promise.resolve(
+          tool.execute(call.input, { toolCallId: call.id ?? `sdk_${randomUUID()}` }),
+        ).then((result) => {
+          run.capturedToolResults.push(result);
+        });
+      }
+    }
     if (earlyCount > 0 && first && (first.type === "text" || first.type === "thinking")) {
       const kind = first.type === "thinking" ? "thinking-delta" : "text-delta";
       for (const chunk of first.chunks) {
