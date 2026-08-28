@@ -209,6 +209,75 @@ test("an earlier ordinary turn replays its own response after a later turn compl
   expect(ctx.sdk.agents[0]?.runs).toHaveLength(2);
 });
 
+test("an ordinary tool request replays its original tool_use after its continuation completes", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      scripts: [[
+        { type: "tools", calls: [{ name: "lookup", input: { q: "weather" }, id: "initial_tool" }] },
+        { type: "text", chunks: ["sunny"] },
+      ]],
+    },
+  });
+  const initialPayload = {
+    model: "composer-2.5",
+    max_tokens: 16,
+    messages: [{ role: "user", content: "weather?" }],
+    tools: [weatherTool()],
+  };
+  const initial = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(initialPayload),
+  });
+  const initialBody = (await initial.json()) as {
+    content: Array<{ type: string; id?: string; name?: string }>;
+    stop_reason: string;
+  };
+  expect(initial.status).toBe(200);
+  expect(initialBody.stop_reason).toBe("tool_use");
+  expect(initialBody.content).toContainEqual(expect.objectContaining({
+    type: "tool_use",
+    id: "initial_tool",
+    name: "lookup",
+  }));
+
+  const continued = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      ...initialPayload,
+      messages: [
+        ...initialPayload.messages,
+        { role: "assistant", content: initialBody.content },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "initial_tool", content: "72F" }],
+        },
+      ],
+    }),
+  });
+  const continuedBody = (await continued.json()) as {
+    content: Array<{ type: string; text?: string }>;
+    stop_reason: string;
+  };
+  expect(continued.status).toBe(200);
+  expect(continuedBody.stop_reason).toBe("end_turn");
+  expect(continuedBody.content).toContainEqual(expect.objectContaining({ type: "text", text: "sunny" }));
+
+  const replay = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(initialPayload),
+  });
+  const replayBody = (await replay.json()) as {
+    content: Array<{ type: string; id?: string; name?: string; text?: string }>;
+    stop_reason: string;
+  };
+  expect(replay.status).toBe(200);
+  expect(replayBody.stop_reason).toBe("tool_use");
+  expect(replayBody.content).toEqual(initialBody.content);
+  expect(replayBody.content).not.toContainEqual(expect.objectContaining({ type: "text", text: "sunny" }));
+  expect(ctx.sdk.createCalls).toHaveLength(1);
+  expect(ctx.sdk.agents[0]?.runs).toHaveLength(1);
+});
+
 test("expired ordinary replay is released and the same request runs again", async () => {
   const clock = new FakeClock(1_000);
   ctx = await startTestApp({

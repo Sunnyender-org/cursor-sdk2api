@@ -348,7 +348,7 @@ export class RunCoordinator {
         live.sessionPolicyFingerprint === turn.lineage.sessionPolicyFingerprint &&
         claim.parent.credentialFingerprint === auth.fingerprint
       ) {
-        live.ordinaryTurn = turn;
+        live.ordinaryReplayOwner = turn;
         this.traceOrdinary({
           action: "resume",
           reason: "exact_successor_live",
@@ -422,7 +422,7 @@ export class RunCoordinator {
       sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
-    session.ordinaryTurn = turn;
+    session.ordinaryReplayOwner = turn;
     try {
       const customTools = mapClientTools(parsed.tools, session, this.deps.clock, () => undefined);
       const agent = await this.deps.sdk.resumeAgent({
@@ -493,7 +493,7 @@ export class RunCoordinator {
   }
 
   private rememberOrdinaryCompletion(session: Session): void {
-    const turn = session.ordinaryTurn;
+    const turn = session.ordinaryReplayOwner;
     const journal = this.deps.ordinaryJournal;
     if (!turn || !journal || !session.replay) return;
     if (session.state !== "completed" && session.state !== "awaiting_tool_results") return;
@@ -529,6 +529,7 @@ export class RunCoordinator {
       },
       expiresAt: completed.expiresAt,
     });
+    session.ordinaryReplayOwner = undefined;
     if (session.state === "completed") {
       session.retainOrdinaryAgent = true;
       session.retainUntil = completed.expiresAt;
@@ -552,7 +553,7 @@ export class RunCoordinator {
       sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
-    if (ordinaryTurn) session.ordinaryTurn = ordinaryTurn;
+    if (ordinaryTurn) session.ordinaryReplayOwner = ordinaryTurn;
     try {
       const prompt = sendOverride ?? renderPrompt(parsed);
       const pump = await this.sdkRunDriver.start({
@@ -582,6 +583,9 @@ export class RunCoordinator {
     sendOverride?: { text: string; images: Array<{ data: string; mimeType: string }> },
   ): Promise<void> {
     this.assertIdentity(session, auth, parsed);
+    if (!session.ordinaryReplayOwner) {
+      this.beginOrdinaryReplaySegment(session, auth, parsed);
+    }
     if (!session.agent) {
       throw sessionLost("Session cannot accept a follow-up send");
     }
@@ -734,6 +738,7 @@ export class RunCoordinator {
     if (unknown.length > 0) throw invalidRequest(`unknown tool_use_id: ${unknown.join(",")}`);
     if (missing.length > 0) throw invalidRequest(`missing tool_result for: ${missing.join(",")}`);
 
+    this.beginOrdinaryReplaySegment(session, auth, parsed);
     session.pump.beginNextSegment();
     session.lastResultDigest = digest;
     session.state = "resuming";
@@ -813,6 +818,7 @@ export class RunCoordinator {
       sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
     });
+    this.beginOrdinaryReplaySegment(session, auth, parsed);
     session.lastResultDigest = batchDigest(results);
     try {
       const pump = await this.sdkRunDriver.start({
@@ -904,6 +910,7 @@ export class RunCoordinator {
       clock: this.deps.clock,
     });
     session.state = "resuming";
+    this.beginOrdinaryReplaySegment(session, auth, parsed);
     session.lastResultDigest = digest;
     this.deps.registry.adopt(session);
 
@@ -1139,6 +1146,20 @@ export class RunCoordinator {
       messageId: turn.messageId,
     });
     writer.finish(turn, { replayed: true });
+  }
+
+  private beginOrdinaryReplaySegment(
+    session: Session,
+    auth: AuthContext,
+    parsed: ParsedMessages,
+  ): void {
+    if (!this.deps.config.ordinaryTurnCoordinator || !this.deps.ordinaryJournal) return;
+    if (session.ordinaryReplayOwner) {
+      throw sessionConflict("session already has an active ordinary replay segment owner");
+    }
+    session.ordinaryReplayOwner = cursorAgentTurnFromParsed(parsed, {
+      tenantScope: auth.fingerprint,
+    });
   }
 
   private assertIdentity(

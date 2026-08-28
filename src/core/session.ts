@@ -59,7 +59,7 @@ export class Session {
   lastResultDigest?: string;
   appliedBoundaryId?: string;
   closeReason?: string;
-  ordinaryTurn?: CursorAgentTurn;
+  ordinaryReplayOwner?: CursorAgentTurn;
   retainOrdinaryAgent = false;
   retainUntil = 0;
 
