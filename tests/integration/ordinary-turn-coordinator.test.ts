@@ -143,6 +143,38 @@ test("identical request digest replays without a second SDK send", async () => {
   );
 });
 
+test("same user text under a different system prompt never replays the old response", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      agentScripts: [
+        [[{ type: "text", chunks: ["from-system-a"] }]],
+        [[{ type: "text", chunks: ["from-system-b"] }]],
+      ],
+    },
+  });
+  const body = (system: string) => ({
+    model: "composer-2.5",
+    max_tokens: 16,
+    system,
+    messages: [{ role: "user", content: "same user text" }],
+  });
+
+  const first = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(body("system A")),
+  });
+  expect(first.status).toBe(200);
+
+  const second = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify(body("system B")),
+  });
+  const secondBody = (await second.json()) as { content: Array<{ text?: string }> };
+  expect(second.status).toBe(200);
+  expect(secondBody.content[0]?.text).toBe("from-system-b");
+  expect(ctx.sdk.createCalls).toHaveLength(2);
+});
+
 test("an earlier ordinary turn replays its own response after a later turn completes", async () => {
   ctx = await startTestApp({
     sdk: {

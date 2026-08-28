@@ -36,6 +36,7 @@ export interface CursorAgentTurn {
   lineage: {
     requestDigest: string;
     parentAssistantAnchor: string;
+    historyDigest: string;
     turnIndex: number;
     toolCatalogDigest: string;
     sessionPolicyFingerprint: string;
@@ -74,7 +75,76 @@ export function serializedContent(content: unknown): string {
 }
 
 export function digestAssistantAnchor(content: unknown): string {
-  return sha256Hex(serializedContent(content));
+  return digestJson(canonicalContent(content));
+}
+
+function canonicalContent(content: unknown): unknown[] {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.map((value) => {
+    if (!value || typeof value !== "object") return { type: "unknown" };
+    const block = value as AnthropicContentBlock;
+    if (block.type === "text") return { type: "text", text: block.text };
+    if (block.type === "thinking") {
+      return {
+        type: "thinking",
+        thinking: block.thinking,
+        signature: block.signature ?? "",
+      };
+    }
+    if (block.type === "tool_use") {
+      return {
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        input: block.input ?? null,
+        toolKind: block.tool_kind ?? "function",
+        namespace: block.namespace ?? "",
+      };
+    }
+    if (block.type === "tool_result") {
+      return {
+        type: "tool_result",
+        toolUseId: block.tool_use_id,
+        content: block.content ?? null,
+        isError: Boolean(block.is_error),
+      };
+    }
+    if (block.type === "image") {
+      const source = block.source;
+      return source.type === "base64"
+        ? {
+            type: "image",
+            sourceType: "base64",
+            mediaType: source.media_type,
+            digest: sha256Hex(source.data),
+          }
+        : { type: "image", sourceType: "url", digest: sha256Hex(source.url) };
+    }
+    return { type: "unknown" };
+  });
+}
+
+function advanceHistoryDigest(
+  previous: string,
+  role: AnthropicMessage["role"],
+  contentDigest: string,
+): string {
+  return digestJson({ previous, role, contentDigest });
+}
+
+function historyDigestBeforeCurrentUser(
+  system: string,
+  conversation: AnthropicMessage[],
+  userIndex: number,
+): string {
+  let digest = digestJson({ system });
+  for (let index = 0; index < userIndex; index += 1) {
+    const message = conversation[index];
+    if (!message) continue;
+    digest = advanceHistoryDigest(digest, message.role, digestAssistantAnchor(message.content));
+  }
+  return digest;
 }
 
 export function normalizeTools(tools: AnthropicTool[] | undefined): AnthropicTool[] {
@@ -152,6 +222,8 @@ export function digestCursorAgentTurnRequest(turn: CursorAgentTurn): string {
     toolCatalogDigest: turn.lineage.toolCatalogDigest,
     toolChoice: turn.toolChoice,
     parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
+    historyDigest: turn.lineage.historyDigest,
+    sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
     turnIndex: turn.lineage.turnIndex,
   });
 }
@@ -163,20 +235,30 @@ export function cursorAgentTurnLineageKey(turn: CursorAgentTurn): string {
     channelId: turn.channelId,
     effectiveModel: turn.effectiveModel,
     parentAssistantAnchor: turn.lineage.parentAssistantAnchor,
+    historyDigest: turn.lineage.historyDigest,
     turnIndex: turn.lineage.turnIndex,
     toolCatalogDigest: turn.lineage.toolCatalogDigest,
+    sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
   });
 }
 
 export function nextCursorAgentTurnLineageKey(turn: CursorAgentTurn, assistantAnchor: string): string {
+  const historyAfterUser = advanceHistoryDigest(
+    turn.lineage.historyDigest,
+    "user",
+    digestAssistantAnchor(turn.conversation[lastUserIndex(turn.conversation)]?.content),
+  );
+  const historyAfterAssistant = advanceHistoryDigest(historyAfterUser, "assistant", assistantAnchor);
   return digestJson({
     tenantScope: turn.tenantScope,
     route: turn.route,
     channelId: turn.channelId,
     effectiveModel: turn.effectiveModel,
     parentAssistantAnchor: assistantAnchor,
+    historyDigest: historyAfterAssistant,
     turnIndex: turn.lineage.turnIndex + 1,
     toolCatalogDigest: turn.lineage.toolCatalogDigest,
+    sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
   });
 }
 
@@ -210,6 +292,7 @@ export function cursorAgentTurnFromParsed(
     lineage: {
       requestDigest: "",
       parentAssistantAnchor: parent ? digestAssistantAnchor(parent.content) : "",
+      historyDigest: historyDigestBeforeCurrentUser(parsed.systemText, conversation, userIndex),
       turnIndex,
       toolCatalogDigest,
       sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),

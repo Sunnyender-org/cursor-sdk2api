@@ -57,6 +57,12 @@ export function decideOrdinaryTurn(input: {
   }
 
   const exact = journal.findExact(lineageKey, requestDigest);
+  if (
+    exact &&
+    exact.sessionPolicyFingerprint !== turn.lineage.sessionPolicyFingerprint
+  ) {
+    return { action: "rebuild", reason: "lineage_mismatch", record: exact };
+  }
   if (exact?.state === "completed") {
     if (hasReplay) return { action: "replay", reason: "identical_digest", record: exact };
     return { action: "fail_closed", reason: "completed_without_in_memory_response", record: exact };

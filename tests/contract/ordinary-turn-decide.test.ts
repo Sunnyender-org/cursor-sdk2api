@@ -131,6 +131,21 @@ test("identical digest without in-memory replay fails closed", () => {
   expect(decision.action).toBe("fail_closed");
 });
 
+test("exact replay validates the stored session policy before replaying", () => {
+  const store = makeJournal();
+  const first = turn([{ role: "user", content: "hello" }]);
+  store.upsert({ ...completedRecord(first), sessionPolicyFingerprint: "a".repeat(64) });
+
+  expect(decideOrdinaryTurn({
+    turn: first,
+    journal: store,
+    inflight: new Set(),
+    now: 10,
+    enabled: true,
+    hasReplay: true,
+  })).toMatchObject({ action: "rebuild", reason: "lineage_mismatch" });
+});
+
 test("disabled coordinator always rebuilds", () => {
   const decision = decideOrdinaryTurn({
     turn: turn([{ role: "user", content: "hello" }]),
