@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -7,6 +7,7 @@ import {
   SandLoaderContractError,
   assertSandContract,
   createSandSdkClone,
+  ensureSandSdkClone,
   resolveInstalledCursorSdkDir,
   rewriteSandSdkSource,
   sandSdkCloneDir,
@@ -184,3 +185,11 @@ test(
   },
   60_000,
 );
+
+test("ensureSandSdkClone links node_modules so patched ESM can resolve host packages", async () => {
+  const stateDir = tempDir("sand-ensure-");
+  const clone = await ensureSandSdkClone(stateDir);
+  expect(clone).toBe(sandSdkCloneDir(stateDir));
+  expect(existsSync(join(clone, "node_modules"))).toBe(true);
+  expect(existsSync(join(clone, "node_modules", "@bufbuild", "protobuf"))).toBe(true);
+});

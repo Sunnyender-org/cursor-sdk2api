@@ -1,5 +1,5 @@
 import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve, sep } from "node:path";
 import { sha256Hex } from "../digest.js";
@@ -360,12 +360,31 @@ function cloneMatchesContract(targetDir: string): boolean {
   }
 }
 
+function ensureCloneNodeModules(targetDir: string, sourceDir: string): void {
+  const dest = join(targetDir, "node_modules");
+  try {
+    const st = lstatSync(dest);
+    if (st.isSymbolicLink() || st.isDirectory()) return;
+  } catch {
+    // clone has no node_modules yet
+  }
+  const candidates = [join(sourceDir, "node_modules"), join(sourceDir, "..", "..")].map((path) => resolve(path));
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, "@bufbuild/protobuf")) || existsSync(join(candidate, "@cursor"))) {
+      symlinkSync(candidate, dest);
+      return;
+    }
+  }
+}
+
 export async function ensureSandSdkClone(stateDir: string, sourceDir?: string): Promise<string> {
   const resolvedSource = sourceDir ?? resolveInstalledCursorSdkDir();
   assertSandContract(resolvedSource);
   const targetDir = sandSdkCloneDir(stateDir);
-  if (cloneMatchesContract(targetDir)) return targetDir;
-  rmSync(targetDir, { recursive: true, force: true });
-  await createSandSdkClone({ sourceDir: resolvedSource, targetDir });
+  if (!cloneMatchesContract(targetDir)) {
+    rmSync(targetDir, { recursive: true, force: true });
+    await createSandSdkClone({ sourceDir: resolvedSource, targetDir });
+  }
+  ensureCloneNodeModules(targetDir, resolvedSource);
   return targetDir;
 }
