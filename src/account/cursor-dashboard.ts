@@ -4,6 +4,9 @@ import { credentialFingerprint } from "../digest.js";
 const DEFAULT_BASE_URL = "https://api2.cursor.sh";
 const RESPONSE_LIMIT = 1 << 20;
 const EXCHANGE_TIMEOUT_MS = 10_000;
+const SAND_GRANT_CACHE_TTL_MS = 10 * 60 * 1000;
+const SAND_ACCESS_GRANTED = "SAND_ACCESS_STATE_GRANTED";
+const SAND_CLIENT_TYPE = "sand";
 
 export interface CursorDashboardQuota {
   available: true;
@@ -47,9 +50,59 @@ export interface CursorDashboardUnavailable {
 
 export type CursorDashboardResult = CursorDashboardQuota | CursorDashboardUnavailable;
 
+export interface CursorSandQuota {
+  available: true;
+  source: "cursor_sand_rpc";
+  accessState: string;
+  usedPercent: number;
+  remainingPercent: number;
+  planLabel?: string;
+  currentPeriodStart?: string;
+  nextResetTimestampUtc?: string;
+  hasAvailableUsage?: boolean;
+  hasNonZeroIncludedLimit?: boolean;
+  includedLimitZero?: boolean;
+  usesPooledEnterpriseAllowance?: boolean;
+  blockReason?: string;
+  purchaseChannel?: string;
+  purchasableTiers?: string[];
+  isPaidTrialPlan?: boolean;
+}
+
+export type CursorSandUnavailableReason =
+  | "api_key_missing"
+  | "api_key_invalid"
+  | "exchange_unavailable"
+  | "sand_access_not_granted"
+  | "sand_access_unreachable"
+  | "sand_access_rejected"
+  | "sand_usage_unreachable"
+  | "sand_usage_rejected"
+  | "sand_usage_percent_missing";
+
+export interface CursorSandUnavailable {
+  available: false;
+  source: "cursor_sand_rpc";
+  reason: CursorSandUnavailableReason;
+  status?: number;
+  accessState?: string;
+  blockReason?: string;
+  purchaseChannel?: string;
+  purchasableTiers?: string[];
+  isPaidTrialPlan?: boolean;
+}
+
+export type CursorSandResult = CursorSandQuota | CursorSandUnavailable;
+
 interface DashboardOptions {
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
+  bypassCache?: boolean;
+}
+
+interface SandGrantCacheEntry {
+  expiresAt: number;
+  result: CursorSandQuota;
 }
 
 interface ExchangeErrorOptions {
@@ -77,6 +130,7 @@ class DashboardResponseError extends Error {
 }
 
 const activeExchanges = new Map<string, Promise<string>>();
+const sandGrantCache = new Map<string, SandGrantCacheEntry>();
 
 function optionalNumber(value: unknown): number | undefined {
   const number = Number(value);
@@ -91,6 +145,18 @@ function ownNumber(record: Record<string, unknown>, key: string): number | undef
 function optionalString(value: unknown): string | undefined {
   const text = String(value ?? "").trim();
   return text || undefined;
+}
+
+function ownBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return undefined;
+  return typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+function ownStringArray(record: Record<string, unknown>, key: string): string[] | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return undefined;
+  const value = record[key];
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => String(entry ?? "").trim()).filter(Boolean);
 }
 
 async function readLimitedJson(response: Response): Promise<Record<string, unknown>> {
@@ -183,7 +249,9 @@ async function dashboardPost(
   accessToken: string,
   baseUrl: string,
   request: typeof globalThis.fetch,
+  clientType?: string,
 ): Promise<{ response: Response; payload: Record<string, unknown> }> {
+  const sandClientType = clientType?.trim();
   const response = await request(`${baseUrl}/aiserver.v1.DashboardService/${method}`, {
     method: "POST",
     redirect: "error",
@@ -191,6 +259,7 @@ async function dashboardPost(
       authorization: `Bearer ${accessToken}`,
       "content-type": "application/json",
       "connect-protocol-version": "1",
+      ...(sandClientType ? { "x-cursor-client-type": sandClientType } : {}),
     },
     body: "{}",
     signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
@@ -219,6 +288,104 @@ function exchangeFailure(error: unknown): CursorDashboardUnavailable {
     };
   }
   return { available: false, source: "cursor_dashboard_rpc", reason: "exchange_unavailable" };
+}
+
+function sandCacheKey(baseUrl: string, apiKey: string): string {
+  return `${baseUrl}:${credentialFingerprint(apiKey)}`;
+}
+
+function cloneSandQuota(result: CursorSandQuota): CursorSandQuota {
+  return {
+    ...result,
+    ...(result.purchasableTiers ? { purchasableTiers: [...result.purchasableTiers] } : {}),
+  };
+}
+
+function readCachedSandQuota(cacheKey: string, bypassCache: boolean | undefined): CursorSandQuota | undefined {
+  if (bypassCache) return undefined;
+  const cached = sandGrantCache.get(cacheKey);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    sandGrantCache.delete(cacheKey);
+    return undefined;
+  }
+  return cloneSandQuota(cached.result);
+}
+
+function cacheGrantedSandQuota(cacheKey: string, result: CursorSandQuota): void {
+  sandGrantCache.set(cacheKey, {
+    expiresAt: Date.now() + SAND_GRANT_CACHE_TTL_MS,
+    result: cloneSandQuota(result),
+  });
+}
+
+function sandExchangeFailure(error: unknown): CursorSandUnavailable {
+  if (error instanceof ExchangeError) {
+    if (error.status === 401 || error.status === 403) {
+      return { available: false, source: "cursor_sand_rpc", reason: "api_key_invalid", status: error.status };
+    }
+    return {
+      available: false,
+      source: "cursor_sand_rpc",
+      reason: "exchange_unavailable",
+      ...(error.status ? { status: error.status } : {}),
+    };
+  }
+  return { available: false, source: "cursor_sand_rpc", reason: "exchange_unavailable" };
+}
+
+function compactSandAccess(payload: Record<string, unknown>): {
+  accessState?: string;
+  blockReason?: string;
+  purchaseChannel?: string;
+  purchasableTiers?: string[];
+  isPaidTrialPlan?: boolean;
+} {
+  const purchasableTiers = ownStringArray(payload, "purchasableTiers");
+  const isPaidTrialPlan = ownBoolean(payload, "isPaidTrialPlan");
+  return {
+    ...(optionalString(payload.state) ? { accessState: optionalString(payload.state) } : {}),
+    ...(optionalString(payload.blockReason) ? { blockReason: optionalString(payload.blockReason) } : {}),
+    ...(optionalString(payload.purchaseChannel) ? { purchaseChannel: optionalString(payload.purchaseChannel) } : {}),
+    ...(purchasableTiers === undefined ? {} : { purchasableTiers }),
+    ...(isPaidTrialPlan === undefined ? {} : { isPaidTrialPlan }),
+  };
+}
+
+function mapSandPostError(
+  error: unknown,
+  unreachable: "sand_access_unreachable" | "sand_usage_unreachable",
+  rejected: "sand_access_rejected" | "sand_usage_rejected",
+): CursorSandUnavailable {
+  if (error instanceof ExchangeError) return sandExchangeFailure(error);
+  return {
+    available: false,
+    source: "cursor_sand_rpc",
+    reason: error instanceof DashboardResponseError ? rejected : unreachable,
+  };
+}
+
+async function dashboardPostRefreshing(
+  method: string,
+  apiKey: string,
+  accessToken: string,
+  baseUrl: string,
+  request: typeof globalThis.fetch,
+  clientType?: string,
+): Promise<{ accessToken: string; response: Response; payload: Record<string, unknown> }> {
+  let token = accessToken;
+  let result = await dashboardPost(method, token, baseUrl, request, clientType);
+  if (result.response.status === 401 || result.response.status === 403) {
+    token = await exchangeApiKey(apiKey, baseUrl, request);
+    result = await dashboardPost(method, token, baseUrl, request, clientType);
+  }
+  return { accessToken: token, ...result };
+}
+
+function clampPercent(value: number): number {
+  if (value < 0) return 0;
+  if (value > 100) return 100;
+  return value;
 }
 
 export async function fetchCursorDashboardQuota(
@@ -340,4 +507,119 @@ export async function fetchCursorDashboardQuota(
   } catch {
     return { available: false, source: "cursor_dashboard_rpc", reason: "dashboard_invalid_response" };
   }
+}
+
+export async function fetchCursorSandQuota(
+  rawApiKey: string,
+  options: DashboardOptions = {},
+): Promise<CursorSandResult> {
+  const apiKey = rawApiKey.trim();
+  if (!apiKey) return { available: false, source: "cursor_sand_rpc", reason: "api_key_missing" };
+  const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+  const request = options.fetch ?? globalThis.fetch;
+  const cacheKey = sandCacheKey(baseUrl, apiKey);
+  const cached = readCachedSandQuota(cacheKey, options.bypassCache);
+  if (cached) return cached;
+
+  let accessToken: string;
+  try {
+    accessToken = await exchangeApiKey(apiKey, baseUrl, request);
+  } catch (error) {
+    return sandExchangeFailure(error);
+  }
+
+  let accessResponse: Response;
+  let accessPayload: Record<string, unknown>;
+  try {
+    ({ accessToken, response: accessResponse, payload: accessPayload } = await dashboardPostRefreshing(
+      "GetSandAccessStatus",
+      apiKey,
+      accessToken,
+      baseUrl,
+      request,
+      SAND_CLIENT_TYPE,
+    ));
+  } catch (error) {
+    return mapSandPostError(error, "sand_access_unreachable", "sand_access_rejected");
+  }
+  if (!accessResponse.ok) {
+    return {
+      available: false,
+      source: "cursor_sand_rpc",
+      reason: "sand_access_rejected",
+      status: accessResponse.status,
+    };
+  }
+
+  const access = compactSandAccess(accessPayload);
+  const granted = (access.accessState ?? "").toUpperCase() === SAND_ACCESS_GRANTED;
+  if (!granted) {
+    sandGrantCache.delete(cacheKey);
+    return {
+      available: false,
+      source: "cursor_sand_rpc",
+      reason: "sand_access_not_granted",
+      ...access,
+    };
+  }
+
+  let usageResponse: Response;
+  let usagePayload: Record<string, unknown>;
+  try {
+    ({ accessToken, response: usageResponse, payload: usagePayload } = await dashboardPostRefreshing(
+      "GetSandUsageStatus",
+      apiKey,
+      accessToken,
+      baseUrl,
+      request,
+      SAND_CLIENT_TYPE,
+    ));
+  } catch (error) {
+    return mapSandPostError(error, "sand_usage_unreachable", "sand_usage_rejected");
+  }
+  if (!usageResponse.ok) {
+    return {
+      available: false,
+      source: "cursor_sand_rpc",
+      reason: "sand_usage_rejected",
+      status: usageResponse.status,
+      ...access,
+    };
+  }
+
+  const usedPercentRaw = ownNumber(usagePayload, "usagePercent");
+  if (usedPercentRaw === undefined) {
+    return {
+      available: false,
+      source: "cursor_sand_rpc",
+      reason: "sand_usage_percent_missing",
+      ...access,
+    };
+  }
+
+  const usedPercent = clampPercent(usedPercentRaw);
+  const hasAvailableUsage = ownBoolean(usagePayload, "hasAvailableUsage");
+  const hasNonZeroIncludedLimit = ownBoolean(usagePayload, "hasNonZeroIncludedLimit");
+  const includedLimitZero = ownBoolean(usagePayload, "includedLimitZero");
+  const usesPooledEnterpriseAllowance = ownBoolean(usagePayload, "usesPooledEnterpriseAllowance");
+  const planLabel = optionalString(usagePayload.grokPlanLabel);
+  const currentPeriodStart = optionalString(usagePayload.currentPeriodStart);
+  const nextResetTimestampUtc = optionalString(usagePayload.nextResetTimestampUtc);
+  const result: CursorSandQuota = {
+    available: true,
+    source: "cursor_sand_rpc",
+    usedPercent,
+    remainingPercent: 100 - usedPercent,
+    ...access,
+    accessState: access.accessState ?? SAND_ACCESS_GRANTED,
+    ...(planLabel ? { planLabel } : {}),
+    ...(currentPeriodStart ? { currentPeriodStart } : {}),
+    ...(nextResetTimestampUtc ? { nextResetTimestampUtc } : {}),
+    ...(hasAvailableUsage === undefined ? {} : { hasAvailableUsage }),
+    ...(hasNonZeroIncludedLimit === undefined ? {} : { hasNonZeroIncludedLimit }),
+    ...(includedLimitZero === undefined ? {} : { includedLimitZero }),
+    ...(usesPooledEnterpriseAllowance === undefined ? {} : { usesPooledEnterpriseAllowance }),
+  };
+  cacheGrantedSandQuota(cacheKey, result);
+  return cloneSandQuota(result);
 }
