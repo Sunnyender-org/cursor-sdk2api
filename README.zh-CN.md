@@ -33,6 +33,9 @@
 - **一把网关 Key，多账号共用：** Cursor 账号池持久化、按模型 round-robin、SDK 陈旧登录态恢复、语义输出前账号故障转移、Dashboard 额度、Web 控制台和 Docker。
 - **续轮冷恢复：** 客户端携带完整 transcript 时，可以重建过期或迁移的工具轮；已经执行过的同一工具由网关内部回放结果，不重复产生副作用。
 - **已集成 new-api：** 已提供外置部署、渠道模板、compose E2E 和验收 smoke。[直接查看 new-api 接入指南](docs/NEW_API_INTEGRATION.md)。
+- **运行方式：** 默认 `sdk`。显式 `sand` 使用 hash 守卫的 Cursor Sand 客户端、隔离 store/workspace，并要求 Grok Bot 授权；不会静默互退。
+- **耐久 Run：** 可选 SQLite 账本（`RUNTIME_LEDGER_V2=1`）保证同一逻辑请求只 Send 一次，断线后继续观察到终态并写出一条 receipt。
+- **Responses Compact：** `POST /v1/responses/compact` 返回唯一网关本地 `csgw1.` compaction item，不第二次 Cursor Send。
 
 > Cursor 通路里的 Grok 不提供 xAI 原生 `x_search`。客户端自己的网页和网络搜索仍可作为普通 function tool 使用。
 
@@ -114,7 +117,7 @@ env_key = "GATEWAY_ACCESS_KEY"
 - `/console/`：本地运维控制台
 - `/v1/models`：Cursor 实时模型目录
 - `/v1/account`：managed 模式下所有 Cursor 账号身份与当前 Dashboard 用量
-- `/health`：能力、SDK 版本和代理传输状态
+- `/health`：能力、SDK 版本、默认/sdk/sand 就绪状态和代理传输状态
 - `STATE_DIR`：账号、SDK store 和 resume 状态
 
 Managed 模式沿用 CPA 的客户端 Key 与上游凭据分离方式：客户端只拿到 `GATEWAY_ACCESS_KEY`，导入的 Cursor Key 留在网关账号池。新会话按模型 round-robin；正常续轮固定原账号，尚未产生语义输出时允许一次备用账号重试。原账号或 SDK 会话丢失时，只要 transcript 完整且自洽，网关可安全冷恢复。BYOK 仅作为可信单用户 sidecar 的兼容模式保留。

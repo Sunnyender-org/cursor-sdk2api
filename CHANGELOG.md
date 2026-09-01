@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Fix GitHub Issue #25: Anthropic SSE in-stream errors now close open blocks, emit `message_delta` + `message_stop`, then one public `error`, without a second handler write.
+- Add explicit `sdk` / `sand` runtime profiles. Default remains `sdk`. Sand requires Grok Bot grant, a hash-guarded `@cursor/sdk` 1.0.30 loader, and isolated store/workspace. Changing profile on an existing session is `409`.
+- Add optional SQLite WAL runtime ledger (`RUNTIME_LEDGER_V2`, default off): one logical claim, disconnect observer, and a single provider receipt with numeric token usage only.
+- Console and `/v1/account` keep Cursor period quota and Grok Bot weekly quota as separate progress. Runtime SDK|Sand applies to new sessions only.
+- Add `POST /v1/responses/compact` and `compaction_trigger` with gateway-local HMAC anchors prefixed `csgw1.`. Tamper/cross-binding fails closed. Compact does not call Cursor Send.
+- Hosted `web_search` is opt-in via `HOSTED_SEARCH_MODE=auto` for a bare live tool. Filters, required/named choice, Chat `web_search_options`, and `x_search` stay 4xx.
+- `/health` reports default/sdk/sand readiness, SDK version, and patch contract version without filesystem paths.
+- new-api channel templates document profile, compact, and receipt billing. Gateway version now follows `package.json`.
+
 ## Unreleased
 
 - Ordinary turns now follow BeefAPI's Cursor Agent contract: a typed turn IR, exact-lineage Agent reuse, and `send(current turn)` instead of flattening the whole transcript on every request. Tool continuation, `x-cursor-session-id` follow-up, and cold rebuild remain. Disable with `ORDINARY_TURN_COORDINATOR=0`.

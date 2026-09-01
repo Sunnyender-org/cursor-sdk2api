@@ -32,7 +32,9 @@
 - **One tool engine:** all three protocols share the same Cursor SDK run, parallel-tool, continuation, replay, and session coordinator. Ordinary follow-up with a complete transcript reuses one durable Agent and sends only the current user turn.
 - **One gateway key, many accounts:** persistent Cursor account pool, model-aware round-robin, stale SDK-auth recovery, pre-semantic account failover, Dashboard quota, web console, and Docker.
 - **Cold continuation recovery:** a complete client transcript can rebuild an expired or moved tool turn while replaying already-completed tools locally instead of executing their side effects twice.
-- **new-api integrated:** ready-made external deployment, channel templates, compose E2E, and acceptance smoke. [Open the new-api guide](docs/NEW_API_INTEGRATION.md).
+- **Runtime profiles:** default `sdk`. Explicit `sand` uses a hash-guarded Cursor Sand client, isolated store/workspace, and Grok Bot grant. No silent fallback.
+- **Durable runs:** optional SQLite ledger (`RUNTIME_LEDGER_V2=1`) claims one logical request, keeps observing after disconnect, and finalizes one receipt.
+- **Responses compact:** `POST /v1/responses/compact` returns one gateway-local `csgw1.` compaction item without a second Cursor Send.
 
 > Cursor-routed Grok does not provide xAI-native `x_search`. Client-owned web and network tools still work as normal function tools.
 
@@ -118,7 +120,7 @@ Client tools are converted to SDK `local.customTools` through MCP. The model cho
 - `/console/`: local operator console
 - `/v1/models`: live Cursor model catalog
 - `/v1/account`: pooled Cursor identities and current Dashboard usage in managed mode
-- `/health`: capabilities, SDK version, and proxy transport mode
+- `/health`: capabilities, SDK version, default/sdk/sand profile readiness, and proxy transport mode
 - `STATE_DIR`: account, SDK store, and resume state
 
 Managed mode follows CPA's split between client keys and upstream credentials: clients receive only `GATEWAY_ACCESS_KEY`; imported Cursor keys stay in the gateway account store. New sessions use model-aware round-robin. Continuations stay pinned when the original account is healthy; before semantic output, one alternate managed account may be tried. If the original account/session is gone, an exact full transcript can cold-branch safely. BYOK remains available for a trusted single-user sidecar.

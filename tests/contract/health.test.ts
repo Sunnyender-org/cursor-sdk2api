@@ -33,6 +33,7 @@ test("health reports runtime capability truth without account data", async () =>
   const body = (await res.json()) as {
     status: string;
     service: string;
+    version: string;
     sdk_version: string;
     runtime: string;
     network: { proxy_configured: boolean; agent_transport: string; fetch_transport: string };
@@ -41,6 +42,7 @@ test("health reports runtime capability truth without account data", async () =>
   };
   expect(body.status).toBe("ok");
   expect(body.service).toBe("cursor-sdk2api");
+  expect(body.version).toBe(ctx.app.config.version);
   expect(body.sdk_version).toBe("1.0.30");
   expect(body.runtime).toBe("local");
   expect(body.network).toEqual({
