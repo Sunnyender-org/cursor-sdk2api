@@ -4,6 +4,7 @@ import type { SdkAgent, SdkCustomToolResult, SdkRun } from "../sdk/port.js";
 import type { AssistantTurn } from "../protocols/anthropic/types.js";
 import type { CursorAgentTurn } from "./cursor-agent-turn.js";
 import type { EventPump } from "./event-pump.js";
+import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "./runtime-profile.js";
 
 export type SessionState =
   | "creating"
@@ -62,6 +63,10 @@ export class Session {
   ordinaryReplayOwner?: CursorAgentTurn;
   retainOrdinaryAgent = false;
   retainUntil = 0;
+  runtimeProfile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE;
+  logicalKey?: string;
+  ledgerRunId?: string;
+  ledgerGeneration = 0;
 
   constructor(input: {
     credentialFingerprint: string;

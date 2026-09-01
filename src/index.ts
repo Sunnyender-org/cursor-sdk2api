@@ -39,6 +39,7 @@ const shutdown = async (signal: string) => {
   logger.info({ signal }, "draining");
   app.beginShutdown();
   await app.coordinator.drain(config.runDeadlineMs);
+  app.close();
   server.close(() => {
     logger.info({}, "shutdown complete");
     process.exit(0);

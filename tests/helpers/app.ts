@@ -79,6 +79,7 @@ export async function startTestApp(
 
 export async function closeTestApp(ctx: TestContext): Promise<void> {
   ctx.app.beginShutdown();
+  ctx.app.close();
   await new Promise<void>((resolve, reject) => {
     ctx.server.close((error) => (error ? reject(error) : resolve()));
   });

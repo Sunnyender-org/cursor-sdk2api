@@ -1,11 +1,10 @@
 /**
  * SQLite WAL runtime ledger for Agent / Run / Interaction / provider receipt.
  *
- * Coordinator wiring (next round): RunCoordinator may hold a RuntimeLedger and
- * call claimRun / persistObserveOffset / recordInteractionDigests /
- * finalizeRunWithReceipt. This module does not register disconnect observers
- * or persist from the coordinator yet. A no-op-ready surface is the class
- * methods below; wiring them is intentionally out of scope.
+ * RunCoordinator holds a RuntimeLedger when GatewayConfig.runtimeLedgerV2 is
+ * on and calls claimRun / persistObserveOffset / recordInteractionDigests /
+ * finalizeRunWithReceipt. Disconnect observers live in the coordinator, not
+ * here. Do not persist prompts or tool argument payloads.
  */
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, statSync } from "node:fs";

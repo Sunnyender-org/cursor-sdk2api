@@ -243,7 +243,7 @@ export class FakeAgent implements SdkAgent {
   readonly runs: FakeRun[] = [];
   lastSend?: SdkSendInput;
   closed = false;
-  private sendCount = 0;
+  sendCount = 0;
 
   constructor(
     readonly input: CreateAgentInput,

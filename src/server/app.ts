@@ -15,6 +15,7 @@ import { RunCoordinator } from "../core/run-coordinator.js";
 import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
 import { OrdinaryTurnJournal } from "../core/ordinary-turn-journal.js";
+import { RuntimeLedger } from "../core/runtime-ledger.js";
 import { SessionRegistry } from "../core/session-registry.js";
 import {
   forbiddenError,
@@ -53,9 +54,11 @@ export interface App {
   ordinaryJournal: OrdinaryTurnJournal;
   accounts: CursorAccountFileStore;
   sdk: SdkRuntime;
+  ledger?: RuntimeLedger;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   listen(): Server;
   beginShutdown(): void;
+  close(): void;
 }
 
 async function listManagedModels(accounts: StoredCursorAccount[], catalog: ModelCatalog): Promise<{
@@ -138,6 +141,9 @@ export function createApp(input: {
   const ordinaryJournal = new OrdinaryTurnJournal(join(config.stateDir, "ordinary-turns.json"), {
     now: () => clock.now(),
   });
+  const ledger = config.runtimeLedgerV2
+    ? RuntimeLedger.open(config.stateDir, { clock, migrateLegacy: true })
+    : undefined;
   const coordinator = new RunCoordinator({
     config,
     sdk,
@@ -147,6 +153,7 @@ export function createApp(input: {
     workspaceDir,
     lineage,
     ordinaryJournal,
+    ledger,
     beforeApplyBoundary,
   });
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
@@ -617,6 +624,7 @@ export function createApp(input: {
     ordinaryJournal,
     accounts,
     sdk,
+    ledger,
     handler,
     listen() {
       const server = createServer((req, res) => {
@@ -629,6 +637,9 @@ export function createApp(input: {
       shuttingDown = true;
       clearInterval(sweepTimer);
       registry.beginShutdown();
+    },
+    close() {
+      ledger?.close();
     },
   };
 }
