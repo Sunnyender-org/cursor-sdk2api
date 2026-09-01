@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { addManagedAccount, getHealth, getManagedAccounts, probeManagedAccount, removeManagedAccount, runPrompt } from "./api";
+import { addManagedAccount, getHealth, getManagedAccounts, probeManagedAccount, removeManagedAccount, runPrompt, setManagedDefaultProfile } from "./api";
 import { go, hrefFor, readRoute, type Route } from "./nav";
 import { RailNav } from "./RailNav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
@@ -94,7 +94,7 @@ const COPY = {
       quickStart: "Quick start",
       quotaPageKicker: "Total then detail",
       quotaPageTitle: "Quota",
-      quotaDesc: "Current Cursor billing-cycle usage from the same User API Key. Empty cells mean the dashboard endpoint was unavailable.",
+      quotaDesc: "Cursor quota and Grok Bot quota are listed separately for the same User API Key.",
       manage: "Accounts",
       authTitle: "Accounts",
       authMeta: "{total} credentials · {ok} probed · {bad} failed",
@@ -106,13 +106,22 @@ const COPY = {
       tested: "Tested",
       failed: "failed",
       quotaKnown: "Quota returned",
-      quotaHint: "Cursor Dashboard current period. No invented totals.",
+      quotaHint: "Cursor quota and Grok Bot quota stay separate.",
       fableOnShort: "on",
       fableOffShort: "off",
       breakdown: "Per account",
       testAll: "Test all",
       noAccounts: "No persistent Cursor accounts yet.",
       quotaMissing: "Not returned",
+      cursorQuota: "Cursor quota",
+      grokBotQuota: "Grok Bot quota",
+      grokBotMissing: "Not returned",
+      remainingPrefix: "{n} left",
+      resetPrefix: "Resets",
+      runtimeSdk: "SDK",
+      runtimeSand: "Sand",
+      runtimeHint: "Applies to new sessions only.",
+      runtimeSandOff: "Sand is available after Grok Bot access is granted.",
       fableOn: "On",
       fableOff: "Off",
       fableUnknown: "Untested",
@@ -134,8 +143,19 @@ const COPY = {
       testing: "Testing",
       use: "Use in playground",
       quota: "Quota",
-      quotaMissing: "Cursor Dashboard usage unavailable",
+      quotaMissing: "Cursor quota unavailable",
       quotaOpen: "Open Cursor usage",
+      cursorQuota: "Cursor quota",
+      grokBotQuota: "Grok Bot quota",
+      grokBotMissing: "Grok Bot quota unavailable",
+      remainingPrefix: "{n} left",
+      resetPrefix: "Resets",
+      runtime: "Runtime",
+      runtimeSdk: "SDK",
+      runtimeSand: "Sand",
+      runtimeHint: "Applies to new sessions only.",
+      runtimeSandOff: "Sand is available after Grok Bot access is granted.",
+      profileError: "Could not save runtime.",
       fableOn: "In catalog",
       fableOff: "Not enabled",
       fableUnknown: "Untested",
@@ -248,7 +268,7 @@ const COPY = {
       quickStart: "快速开始",
       quotaPageKicker: "先总后分",
       quotaPageTitle: "配额",
-      quotaDesc: "使用同一把 Cursor User API Key 查询当前计费周期用量。空单元格表示 Dashboard 额度接口暂不可用。",
+      quotaDesc: "同一把 User API Key 下，Cursor 额度和 Grok Bot 额度分开列出。",
       manage: "账号",
       authTitle: "账号",
       authMeta: "{total} 个凭证 · {ok} 个测通 · {bad} 个异常",
@@ -260,13 +280,22 @@ const COPY = {
       tested: "已测通",
       failed: "失败",
       quotaKnown: "额度已返回",
-      quotaHint: "Cursor Dashboard 当前周期，不编造额度。",
+      quotaHint: "Cursor 额度和 Grok Bot 额度各算各的。",
       fableOnShort: "已开",
       fableOffShort: "未开",
       breakdown: "分账号",
       testAll: "全部测通",
       noAccounts: "还没有持久化的 Cursor 账号。",
       quotaMissing: "未返回",
+      cursorQuota: "Cursor 额度",
+      grokBotQuota: "Grok Bot 额度",
+      grokBotMissing: "未返回",
+      remainingPrefix: "剩余 {n}",
+      resetPrefix: "重置",
+      runtimeSdk: "SDK",
+      runtimeSand: "Sand",
+      runtimeHint: "只对新会话生效。",
+      runtimeSandOff: "开通 Grok Bot 额度后才能选用 Sand。",
       fableOn: "已开",
       fableOff: "未开",
       fableUnknown: "未测",
@@ -288,8 +317,19 @@ const COPY = {
       testing: "测试中",
       use: "去试跑",
       quota: "额度",
-      quotaMissing: "Cursor Dashboard 用量不可用",
+      quotaMissing: "Cursor 额度不可用",
       quotaOpen: "打开 Cursor 用量",
+      cursorQuota: "Cursor 额度",
+      grokBotQuota: "Grok Bot 额度",
+      grokBotMissing: "Grok Bot 额度不可用",
+      remainingPrefix: "剩余 {n}",
+      resetPrefix: "重置",
+      runtime: "运行方式",
+      runtimeSdk: "SDK",
+      runtimeSand: "Sand",
+      runtimeHint: "只对新会话生效。",
+      runtimeSandOff: "开通 Grok Bot 额度后才能选用 Sand。",
+      profileError: "运行方式没有保存成功。",
       fableOn: "目录已含",
       fableOff: "未开启",
       fableUnknown: "未检测",
@@ -348,6 +388,7 @@ export function App() {
   const [activeId, setActiveId] = useState("");
   const [protocol, setProtocol] = useState<Protocol>("messages");
   const [selectedModel, setSelectedModel] = useState("");
+  const [profileError, setProfileError] = useState("");
   const [prompt, setPrompt] = useState("Reply with a short status check for this gateway.");
   const [stream, setStream] = useState(true);
   const [output, setOutput] = useState("");
@@ -519,6 +560,16 @@ export function App() {
     if (route.accountId === id) go("accounts");
   };
 
+  const setAccountProfile = async (id: string, profile: "sdk" | "sand") => {
+    setProfileError("");
+    try {
+      const account = await setManagedDefaultProfile(id, profile);
+      patchRoster(id, { account });
+    } catch (error) {
+      setProfileError(messageOf(error) || t.detail.profileError);
+    }
+  };
+
   const run = async () => {
     if (!active || !selectedModel || !prompt.trim()) return;
     setRunState("loading");
@@ -650,6 +701,8 @@ export function App() {
               setActiveId(id);
               go("playground");
             }}
+            onProfile={(id, profile) => void setAccountProfile(id, profile)}
+            profileError={profileError}
           />
         ) : null}
         {route.page === "playground" ? (

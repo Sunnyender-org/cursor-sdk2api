@@ -204,6 +204,15 @@ export type HomeCopy = {
   testAll: string;
   noAccounts: string;
   quotaMissing: string;
+  cursorQuota: string;
+  grokBotQuota: string;
+  grokBotMissing: string;
+  remainingPrefix: string;
+  resetPrefix: string;
+  runtimeSdk: string;
+  runtimeSand: string;
+  runtimeHint: string;
+  runtimeSandOff: string;
   fableOn: string;
   fableOff: string;
   fableUnknown: string;

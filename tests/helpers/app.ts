@@ -2,6 +2,8 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { UNAVAILABLE_GROK_BOT } from "../../src/account/service.js";
+import type { CursorSandResult } from "../../src/account/cursor-dashboard.js";
 import { SystemClock, type Clock } from "../../src/clock.js";
 import { loadConfig, type GatewayConfig } from "../../src/config.js";
 import { createLogger } from "../../src/log.js";
@@ -25,6 +27,7 @@ export async function startTestApp(
     clock?: Clock;
     captureLogs?: boolean;
     beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
+    fetchSandQuota?: (apiKey: string) => Promise<CursorSandResult>;
   } = {},
 ): Promise<TestContext> {
   const clock = options.clock ?? new SystemClock();
@@ -58,6 +61,7 @@ export async function startTestApp(
     logger,
     workspaceDir: mkdtempSync(join(tmpdir(), "cursor-sdk2api-test-")),
     beforeApplyBoundary: options.beforeApplyBoundary,
+    fetchSandQuota: options.fetchSandQuota ?? (async () => UNAVAILABLE_GROK_BOT),
   });
   const server = createServer((req, res) => {
     void app.handler(req, res);

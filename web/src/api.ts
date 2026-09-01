@@ -4,6 +4,7 @@ export interface ManagementAccount {
   id: string;
   key_hint: string;
   added_at: number;
+  default_profile?: "sdk" | "sand";
 }
 
 export async function getHealth(): Promise<HealthPayload> {
@@ -37,6 +38,19 @@ export async function addManagedAccount(apiKey: string): Promise<ManagementAccou
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ api_key: apiKey }),
+  });
+  return body.account;
+}
+
+export async function setManagedDefaultProfile(
+  id: string,
+  defaultProfile: "sdk" | "sand",
+): Promise<AccountPayload> {
+  const body = await managementJson<{ account: AccountPayload }>({
+    method: "PUT",
+    path: "/default_profile",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, default_profile: defaultProfile }),
   });
   return body.account;
 }

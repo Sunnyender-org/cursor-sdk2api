@@ -1,8 +1,9 @@
 import { Button } from "../bflabs/Button";
 import { catalogHasFable5, FABLE5_DASHBOARD, FABLE5_DOCS, modelLooksLikeFable5 } from "../fable5";
 import { hrefFor } from "../nav";
-import { formatQuota, formatQuotaBreakdown } from "../quota";
+import { currentProfile, sandSelectable } from "../quota";
 import { identityLabel, type RosterItem } from "../roster";
+import { QuotaPair } from "./QuotaMeters";
 import { ActionLink, PageFrame } from "./shared";
 
 export function AccountDetailPage({
@@ -10,6 +11,8 @@ export function AccountDetailPage({
   item,
   onTest,
   onUse,
+  onProfile,
+  profileError,
 }: {
   t: {
     missing: string;
@@ -29,10 +32,23 @@ export function AccountDetailPage({
     models: string;
     noModels: string;
     cursorUsage: string;
+    cursorQuota: string;
+    grokBotQuota: string;
+    grokBotMissing: string;
+    remainingPrefix: string;
+    resetPrefix: string;
+    runtime: string;
+    runtimeSdk: string;
+    runtimeSand: string;
+    runtimeHint: string;
+    runtimeSandOff: string;
+    profileError: string;
   };
   item?: RosterItem;
   onTest: (id: string) => void;
   onUse: (id: string) => void;
+  onProfile: (id: string, profile: "sdk" | "sand") => void;
+  profileError?: string;
 }) {
   if (!item) {
     return (
@@ -42,9 +58,10 @@ export function AccountDetailPage({
     );
   }
 
-  const quota = formatQuota(item.account);
-  const quotaBreakdown = formatQuotaBreakdown(item.account);
   const fable = item.models ? (catalogHasFable5(item.models) ? "on" : "off") : "unknown";
+  const catalogReady = Boolean(item.models && item.models.status !== "unavailable");
+  const sandOn = sandSelectable(item.account, catalogReady);
+  const profile = currentProfile(item.account);
 
   return (
     <PageFrame
@@ -60,14 +77,41 @@ export function AccountDetailPage({
         </>
       }
     >
-      <dl className="detail-list">
-        <div>
-          <dt>{t.quota}</dt>
-          <dd>
-            {quota || t.quotaMissing}
-            {quotaBreakdown ? <span className="sub quota-breakdown">{quotaBreakdown}</span> : null}
-          </dd>
+      <QuotaPair
+        account={item.account}
+        cursorLabel={t.cursorQuota}
+        grokLabel={t.grokBotQuota}
+        cursorMissing={t.quotaMissing}
+        grokMissing={t.grokBotMissing}
+        remainingPrefix={t.remainingPrefix}
+        resetPrefix={t.resetPrefix}
+      />
+      <section className="runtime-card">
+        <h2 className="subhead">{t.runtime}</h2>
+        <div className="runtime-profile" role="group" aria-label={t.runtime}>
+          <Button
+            variant={profile === "sdk" ? "primary" : "secondary"}
+            size="sm"
+            aria-pressed={profile === "sdk"}
+            onClick={() => onProfile(item.id, "sdk")}
+          >
+            {t.runtimeSdk}
+          </Button>
+          <Button
+            variant={profile === "sand" ? "primary" : "secondary"}
+            size="sm"
+            aria-pressed={profile === "sand"}
+            disabled={!sandOn}
+            onClick={() => onProfile(item.id, "sand")}
+          >
+            {t.runtimeSand}
+          </Button>
         </div>
+        <p className="runtime-hint">{t.runtimeHint}</p>
+        {!sandOn ? <p className="runtime-hint">{t.runtimeSandOff}</p> : null}
+        {profileError ? <p className="field-error" role="alert">{profileError}</p> : null}
+      </section>
+      <dl className="detail-list">
         <div>
           <dt>Fable 5</dt>
           <dd>{fable === "on" ? t.fableOn : fable === "off" ? t.fableOff : t.fableUnknown}</dd>

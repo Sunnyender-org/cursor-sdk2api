@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { catalogHasFable5, modelLooksLikeFable5 } from "../../web/src/fable5.js";
-import { formatQuota, formatQuotaBreakdown } from "../../web/src/quota.js";
+import { formatGrokBotQuota, formatQuota, formatQuotaBreakdown, cursorUsedPercent, grokBotUsedPercent, sandSelectable } from "../../web/src/quota.js";
 import { maskKey } from "../../web/src/accounts.js";
 import { RECIPE_ORDER } from "../../web/src/recipes.js";
 
@@ -73,6 +73,30 @@ test("quota formatter keeps Cursor and Claude-family usage percentages separate"
       capabilities: { identity: true, spending: true, limits: true },
     }),
   ).toBe("Cursor Models 1.0% · Other Models 5.2%");
+});
+
+test("quota helpers keep Cursor period percent distinct from Grok Bot weekly percent", () => {
+  const account = {
+    status: "ok" as const,
+    identity: { api_key_name: "local-dev" },
+    limits: { remaining_usd: 380.35, limit_usd: 400, used_percent: 4.9125 },
+    grok_bot: {
+      available: true,
+      used_percent: 12.5,
+      remaining_percent: 87.5,
+      plan_label: "Grok Bot Plan",
+    },
+    runtime: { default_profile: "sdk", sand_selectable: true, applies_to_new_sessions: true },
+    capabilities: { identity: true, spending: true, limits: true, grok_bot: true },
+  };
+  expect(cursorUsedPercent(account)).toBe(4.9125);
+  expect(grokBotUsedPercent(account)).toBe(12.5);
+  expect(cursorUsedPercent(account)).not.toBe(grokBotUsedPercent(account));
+  expect(formatGrokBotQuota(account)).toContain("12.5%");
+  expect(formatQuotaBreakdown(account)).not.toContain("12.5");
+  expect(sandSelectable(account, true)).toBe(true);
+  expect(sandSelectable(account, false)).toBe(false);
+  expect(sandSelectable({ ...account, grok_bot: { available: false, reason: "sand_access_not_granted" } }, true)).toBe(false);
 });
 
 test("key mask keeps the edges and hides the middle", () => {

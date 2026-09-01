@@ -44,10 +44,24 @@ export interface AccountPayload {
   };
   spending?: Record<string, unknown>;
   limits?: Record<string, unknown>;
+  grok_bot?: {
+    available?: boolean;
+    used_percent?: unknown;
+    remaining_percent?: unknown;
+    plan_label?: unknown;
+    next_reset_timestamp_utc?: unknown;
+    reason?: unknown;
+  };
+  runtime?: {
+    default_profile?: "sdk" | "sand" | string;
+    sand_selectable?: boolean;
+    applies_to_new_sessions?: boolean;
+  };
   capabilities: {
     identity: boolean;
     spending: boolean;
     limits: boolean;
+    grok_bot?: boolean;
   };
   reasons?: Record<string, string>;
 }

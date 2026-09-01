@@ -1,13 +1,15 @@
 import { Button } from "../bflabs/Button";
 import { catalogHasFable5 } from "../fable5";
 import { hrefFor } from "../nav";
-import { formatQuota, formatQuotaBreakdown } from "../quota";
+import { formatGrokBotQuota, formatQuota, formatQuotaBreakdown } from "../quota";
 import { identityLabel, type RosterItem } from "../roster";
 import { ActionLink } from "./shared";
 
 export function AccountTable({
   items,
   quotaMissing,
+  grokBotQuota,
+  grokBotMissing,
   fableOn,
   fableOff,
   fableUnknown,
@@ -22,6 +24,8 @@ export function AccountTable({
 }: {
   items: RosterItem[];
   quotaMissing: string;
+  grokBotQuota: string;
+  grokBotMissing: string;
   fableOn: string;
   fableOff: string;
   fableUnknown: string;
@@ -47,6 +51,7 @@ export function AccountTable({
           {items.map((item) => {
             const quota = formatQuota(item.account);
             const quotaBreakdown = formatQuotaBreakdown(item.account);
+            const grokQuota = formatGrokBotQuota(item.account);
             const fable = item.models ? (catalogHasFable5(item.models) ? fableOn : fableOff) : fableUnknown;
             const probe =
               item.testState === "testing"
@@ -67,6 +72,7 @@ export function AccountTable({
                 <td>
                   <span>{quota || quotaMissing}</span>
                   {quotaBreakdown ? <span className="sub quota-breakdown">{quotaBreakdown}</span> : null}
+                  <span className="sub quota-breakdown">{grokBotQuota} {grokQuota || grokBotMissing}</span>
                 </td>
                 <td>{fable}</td>
                 <td>{probe}</td>

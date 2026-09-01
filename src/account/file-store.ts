@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir } from "../core/lineage-store.js";
 import { credentialFingerprint } from "../digest.js";
+import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "../core/runtime-profile.js";
 
 interface AccountFile {
   version: 1;
@@ -19,6 +20,7 @@ interface AccountFile {
   type: "cursor";
   api_key: string;
   added_at: number;
+  default_profile?: RuntimeProfile;
 }
 
 export interface StoredCursorAccount {
@@ -26,6 +28,7 @@ export interface StoredCursorAccount {
   apiKey: string;
   addedAt: number;
   keyHint: string;
+  defaultProfile: RuntimeProfile;
 }
 
 const FILE_RE = /^acct_[A-Za-z0-9-]+\.json$/;
@@ -33,6 +36,10 @@ const FILE_RE = /^acct_[A-Za-z0-9-]+\.json$/;
 function keyHint(value: string): string {
   const trimmed = value.trim();
   return trimmed.length <= 4 ? "••••" : `••••${trimmed.slice(-4)}`;
+}
+
+function readStoredProfile(value: unknown): RuntimeProfile {
+  return value === "sand" ? "sand" : DEFAULT_RUNTIME_PROFILE;
 }
 
 function isAccountFile(value: unknown): value is AccountFile {
@@ -103,6 +110,17 @@ export class CursorAccountFileStore {
     return true;
   }
 
+  setDefaultProfile(id: string, profile: RuntimeProfile): StoredCursorAccount | undefined {
+    const name = `${id}.json`;
+    if (!FILE_RE.test(name)) return undefined;
+    const path = join(this.dir, name);
+    const account = this.read(path);
+    if (!account) return undefined;
+    const next: AccountFile = { ...account, default_profile: profile };
+    this.write(next);
+    return this.toPublic(next);
+  }
+
   dirMode(): number {
     return statSync(this.dir).mode & 0o777;
   }
@@ -151,6 +169,7 @@ export class CursorAccountFileStore {
       apiKey: account.api_key,
       addedAt: account.added_at,
       keyHint: keyHint(account.api_key),
+      defaultProfile: readStoredProfile(account.default_profile),
     };
   }
 }

@@ -2,11 +2,11 @@ import { Button } from "../bflabs/Button";
 import { CountUp } from "../bflabs/CountUp";
 import { catalogHasFable5 } from "../fable5";
 import { hrefFor } from "../nav";
-import { formatQuota } from "../quota";
-import type { RosterItem } from "../roster";
-import { AccountTable } from "./AccountTable";
+import { formatGrokBotQuota, formatQuota } from "../quota";
+import { identityLabel, type RosterItem } from "../roster";
 import type { HomeCopy } from "./HomePage";
-import { PageFrame } from "./shared";
+import { QuotaPair } from "./QuotaMeters";
+import { ActionLink, PageFrame } from "./shared";
 
 export function QuotaPage({
   t,
@@ -21,7 +21,7 @@ export function QuotaPage({
 }) {
   const passed = roster.filter((item) => item.testState === "pass");
   const failed = roster.filter((item) => item.testState === "fail");
-  const quotaKnown = passed.filter((item) => formatQuota(item.account)).length;
+  const quotaKnown = passed.filter((item) => formatQuota(item.account) || formatGrokBotQuota(item.account)).length;
   const fableOn = passed.filter((item) => catalogHasFable5(item.models)).length;
   const fableOff = passed.filter((item) => item.models && !catalogHasFable5(item.models)).length;
 
@@ -41,19 +41,33 @@ export function QuotaPage({
       {roster.length === 0 ? (
         <p className="empty">{t.noAccounts} <a href={hrefFor("accounts")}>{t.manage}</a></p>
       ) : (
-        <AccountTable
-          items={roster}
-          quotaMissing={t.quotaMissing}
-          fableOn={t.fableOn}
-          fableOff={t.fableOff}
-          fableUnknown={t.fableUnknown}
-          testing={t.testing}
-          test={t.test}
-          testFail={t.testFail}
-          open={t.open}
-          headers={t.headers}
-          onTest={onTest}
-        />
+        <ul className="quota-accounts">
+          {roster.map((item) => (
+            <li key={item.id} className="quota-account">
+              <div className="quota-account-head">
+                <a className="row-link" href={hrefFor("account", item.id)}>
+                  <strong>{identityLabel(item.account, item.keyHint)}</strong>
+                  <span className="sub">{item.account?.identity?.api_key_name || item.keyHint}</span>
+                </a>
+                <div className="row-action-group">
+                  <Button variant="secondary" size="sm" disabled={item.testState === "testing"} onClick={() => onTest(item.id)}>
+                    {item.testState === "testing" ? t.testing : t.test}
+                  </Button>
+                  <ActionLink href={hrefFor("account", item.id)}>{t.open}</ActionLink>
+                </div>
+              </div>
+              <QuotaPair
+                account={item.account}
+                cursorLabel={t.cursorQuota}
+                grokLabel={t.grokBotQuota}
+                cursorMissing={t.quotaMissing}
+                grokMissing={t.grokBotMissing}
+                remainingPrefix={t.remainingPrefix}
+                resetPrefix={t.resetPrefix}
+              />
+            </li>
+          ))}
+        </ul>
       )}
     </PageFrame>
   );

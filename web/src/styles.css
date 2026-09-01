@@ -619,6 +619,96 @@ html[lang="zh-CN"] .page-head h1 { letter-spacing: 0; }
 .detail-list { display: grid; gap: 12px; margin-bottom: 20px; }
 .detail-list div { display: grid; grid-template-columns: 88px 1fr; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--hair); }
 .detail-list dt { color: var(--mute); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+.quota-accounts {
+  list-style: none;
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  max-width: 100%;
+}
+.quota-account {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--hair);
+}
+.quota-account-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.quota-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+.quota-meter {
+  min-width: 0;
+  max-width: 100%;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  overflow-wrap: break-word;
+}
+.quota-meter .bf-progress__meta {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.quota-meter-detail {
+  margin-top: 10px;
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+.runtime-card {
+  min-width: 0;
+  margin: 8px 0 24px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+}
+.runtime-card .subhead { margin-top: 0; }
+.runtime-profile {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.runtime-hint {
+  margin-top: 12px;
+  color: var(--mute);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.runtime-card .field-error { padding: 8px 0 0; }
+
+@media (max-width: 720px) {
+  .quota-pair { grid-template-columns: minmax(0, 1fr); }
+  .quota-account-head { flex-direction: column; }
+}
+
+@media (max-width: 390px) {
+  .quota-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .quota-meter,
+  .quota-account,
+  .runtime-card,
+  .runtime-profile {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .quota-meter,
+  .quota-account,
+  .runtime-card {
+    overflow-x: hidden;
+  }
+}
 .callout { padding: 16px 0 8px; }
 .model-plain { list-style: none; }
 .model-plain li {

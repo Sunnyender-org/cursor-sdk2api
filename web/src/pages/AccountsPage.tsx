@@ -62,6 +62,8 @@ export function AccountsPage({
         <AccountTable
           items={roster}
           quotaMissing={t.quotaMissing}
+          grokBotQuota={t.grokBotQuota}
+          grokBotMissing={t.grokBotMissing}
           fableOn={t.fableOn}
           fableOff={t.fableOff}
           fableUnknown={t.fableUnknown}

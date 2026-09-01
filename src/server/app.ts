@@ -7,8 +7,10 @@ import {
   type AuthContext,
   type ClientAuthorization,
 } from "../auth/credentials.js";
+import { fetchCursorSandQuota } from "../account/cursor-dashboard.js";
 import { readAccount } from "../account/service.js";
 import { CursorAccountFileStore, type StoredCursorAccount } from "../account/file-store.js";
+import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "../core/runtime-profile.js";
 import type { Clock } from "../clock.js";
 import type { GatewayConfig } from "../config.js";
 import { RunCoordinator } from "../core/run-coordinator.js";
@@ -127,8 +129,10 @@ export function createApp(input: {
   logger: Logger;
   workspaceDir: string;
   beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
+  fetchSandQuota?: typeof fetchCursorSandQuota;
 }): App {
   const { config, sdk, clock, logger, workspaceDir, beforeApplyBoundary } = input;
+  const fetchSandQuota = input.fetchSandQuota ?? fetchCursorSandQuota;
   const registry = new SessionRegistry(clock, config.instanceId, {
     globalActiveRuns: config.globalActiveRuns,
     perCredentialActiveRuns: config.perCredentialActiveRuns,
@@ -159,6 +163,17 @@ export function createApp(input: {
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
   const accounts = new CursorAccountFileStore(config.stateDir, config.managedCursorKey);
   const accountPool = new CursorAccountPool();
+  const accountPayload = (apiKey: string, defaultProfile?: RuntimeProfile) =>
+    readAccount(sdk, apiKey, {
+      fetchSandQuota,
+      defaultProfile: defaultProfile ?? config.runtimePolicy.defaultProfile ?? DEFAULT_RUNTIME_PROFILE,
+    });
+  const publicAccount = (account: StoredCursorAccount) => ({
+    id: account.id,
+    key_hint: account.keyHint,
+    added_at: account.addedAt,
+    default_profile: account.defaultProfile,
+  });
 
   const boundCredentialFingerprint = (parsed: ParsedMessages, sessionHint?: string): string | undefined => {
     if (parsed.continuation) {
@@ -376,7 +391,7 @@ export function createApp(input: {
         const auth = managedAccountAuth(stored.apiKey);
         const [models, account] = await Promise.all([
           catalog.list(stored.apiKey, auth.fingerprint),
-          readAccount(sdk, stored.apiKey),
+          accountPayload(stored.apiKey, stored.defaultProfile),
         ]);
         sendJson(res, 200, {
           models: {
@@ -437,17 +452,39 @@ export function createApp(input: {
         throw invalidRequest("protocol must be messages, chat, or responses");
       }
 
+      if (path === "/v0/management/accounts/default_profile" && method === "PUT") {
+        const body = await readJsonBody(req, config.maxBodyBytes) as {
+          id?: unknown;
+          default_profile?: unknown;
+        } | undefined;
+        const id = typeof body?.id === "string" ? body.id.trim() : "";
+        if (!id) throw invalidRequest("id is required");
+        const stored = accounts.get(id);
+        if (!stored) throw notFound("Persistent account was not found");
+        const rawProfile = typeof body?.default_profile === "string" ? body.default_profile.trim().toLowerCase() : "";
+        if (rawProfile !== "sdk" && rawProfile !== "sand") {
+          throw invalidRequest("default_profile is invalid");
+        }
+        const grokBot = await fetchSandQuota(stored.apiKey).catch(() => ({ available: false as const }));
+        if (rawProfile === "sand" && !grokBot.available) {
+          throw invalidRequest("Sand is unavailable until Grok Bot access is granted");
+        }
+        const updated = accounts.setDefaultProfile(id, rawProfile);
+        if (!updated) throw notFound("Persistent account was not found");
+        sendJson(res, 200, {
+          ...publicAccount(updated),
+          account: await accountPayload(updated.apiKey, updated.defaultProfile),
+        }, requestId);
+        return;
+      }
+
       if (path === "/v0/management/accounts") {
         if (method === "GET") {
           sendJson(
             res,
             200,
             {
-              accounts: accounts.list().map((account) => ({
-                id: account.id,
-                key_hint: account.keyHint,
-                added_at: account.addedAt,
-              })),
+              accounts: accounts.list().map(publicAccount),
             },
             requestId,
           );
@@ -462,11 +499,7 @@ export function createApp(input: {
             res,
             201,
             {
-              account: {
-                id: account.id,
-                key_hint: account.keyHint,
-                added_at: account.addedAt,
-              },
+              account: publicAccount(account),
             },
             requestId,
           );
@@ -514,7 +547,7 @@ export function createApp(input: {
       if (method === "GET" && path === "/v1/account") {
         const client = authorizeClient(req, config);
         if (client.mode === "byok") {
-          const account = await readAccount(sdk, client.auth.cursorApiKey);
+          const account = await accountPayload(client.auth.cursorApiKey);
           sendJson(res, 200, account, requestId);
         } else {
           const configured = accounts.list();
@@ -522,7 +555,7 @@ export function createApp(input: {
             configured.map(async (account) => ({
               id: account.id,
               key_hint: account.keyHint,
-              account: await readAccount(sdk, account.apiKey),
+              account: await accountPayload(account.apiKey, account.defaultProfile),
             })),
           );
           sendJson(res, 200, { pool: true, account_count: details.length, accounts: details }, requestId);
