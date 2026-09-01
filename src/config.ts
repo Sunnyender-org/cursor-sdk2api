@@ -2,6 +2,11 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  loadRuntimePolicyFromEnv,
+  parseRuntimeLedgerV2,
+  type RuntimePolicy,
+} from "./core/runtime-profile.js";
 import { instanceId } from "./ids.js";
 import { resolveOutboundProxy } from "./sdk/proxy.js";
 
@@ -36,6 +41,8 @@ export interface GatewayConfig {
   agentTransport: "http1-proxy" | "http2-direct";
   fetchTransport: "undici-proxy" | "fetch-direct";
   capabilities: RuntimeCapabilities;
+  runtimePolicy: RuntimePolicy;
+  runtimeLedgerV2: boolean;
 }
 
 export interface RuntimeCapabilities {
@@ -143,6 +150,8 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     agentTransport: proxyConfigured ? "http1-proxy" : "http2-direct",
     fetchTransport: proxyConfigured ? "undici-proxy" : "fetch-direct",
     capabilities: { ...DEFAULT_CAPABILITIES },
+    runtimePolicy: loadRuntimePolicyFromEnv(),
+    runtimeLedgerV2: parseRuntimeLedgerV2(),
   };
 
   if (authMode === "managed") {

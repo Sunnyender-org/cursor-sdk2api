@@ -80,8 +80,18 @@ const changes: Array<[string, Partial<SessionPolicyInput>]> = [
     },
   ],
   ["choice policy", { toolChoice: { mode: "auto" as const, disableParallel: false } }],
+  ["runtime profile", { runtimeProfile: "sand" as const }],
 ];
 
 test.each(changes)("session policy changes with %s", (_label, change) => {
   expect(sessionPolicyFingerprint({ ...base, ...change })).not.toBe(sessionPolicyFingerprint(base));
+});
+
+test("session policy treats omitted runtime profile as sdk and differs for sand", () => {
+  expect(sessionPolicyFingerprint({ ...base, runtimeProfile: "sdk" })).toBe(
+    sessionPolicyFingerprint(base),
+  );
+  expect(sessionPolicyFingerprint({ ...base, runtimeProfile: "sand" })).not.toBe(
+    sessionPolicyFingerprint(base),
+  );
 });

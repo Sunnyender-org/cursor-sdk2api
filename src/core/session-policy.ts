@@ -1,12 +1,18 @@
 import { digestJson, stableStringify } from "../digest.js";
 import type { AnthropicTool, ParsedMessages } from "../protocols/anthropic/types.js";
 import type { ToolChoicePolicy } from "../protocols/tool-choice.js";
+import {
+  boundRuntimeProfile,
+  DEFAULT_RUNTIME_PROFILE,
+  type RuntimeProfile,
+} from "./runtime-profile.js";
 
 export interface SessionPolicyInput {
   modelId: string;
   modelParams: Array<{ id: string; value: string }>;
   tools: AnthropicTool[];
   toolChoice: ToolChoicePolicy | null;
+  runtimeProfile?: RuntimeProfile;
 }
 
 export function sessionPolicyFingerprint(input: SessionPolicyInput): string {
@@ -17,6 +23,7 @@ export function sessionPolicyFingerprint(input: SessionPolicyInput): string {
     },
     tools: normalizeExecutableTools(input.tools),
     toolChoice: input.toolChoice,
+    runtimeProfile: boundRuntimeProfile(input.runtimeProfile),
   });
 }
 
@@ -27,12 +34,14 @@ export function executableToolCatalogFingerprint(tools: AnthropicTool[]): string
 export function sessionPolicyFingerprintFromParsed(
   parsed: ParsedMessages,
   effectiveModelParams: Array<{ id: string; value: string }> = parsed.modelParams,
+  runtimeProfile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE,
 ): string {
   return sessionPolicyFingerprint({
     modelId: parsed.model,
     modelParams: effectiveModelParams,
     tools: parsed.tools,
     toolChoice: parsed.toolChoice ?? null,
+    runtimeProfile,
   });
 }
 
