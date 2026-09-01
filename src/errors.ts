@@ -77,6 +77,9 @@ export function sdkFailure(error: unknown): GatewayError {
   if (/RateLimitError/i.test(name) || /rate.?limit|resource_exhausted/i.test(`${code} ${message}`)) {
     return rateLimited(message);
   }
+  if (/Sand traffic is not supported/i.test(message)) {
+    return forbiddenError("Sand is not supported for this Cursor account");
+  }
   if (/not supported in your region|model not available|permission|forbidden|not allowed/i.test(message)) {
     return forbiddenError(message);
   }

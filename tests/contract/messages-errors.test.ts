@@ -7,6 +7,29 @@ afterEach(async () => {
   if (ctx) await closeTestApp(ctx);
 });
 
+test("Cursor rejecting Sand traffic maps to a public forbidden error", async () => {
+  ctx = await startTestApp({
+    config: { runtimePolicy: { defaultProfile: "sand", allowRequestOverride: false, hostedSearchMode: "off" } },
+    assertSandAccess: async () => undefined,
+    sdk: {
+      scripts: [[{ type: "send-error", message: "[invalid_argument] Sand traffic is not supported on this endpoint" }]],
+    },
+  });
+  const res = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  });
+  const body = (await res.json()) as { error: { type: string; message: string } };
+  expect(res.status).toBe(403);
+  expect(body.error.type).toBe("forbidden");
+  expect(body.error.message).toBe("Sand is not supported for this Cursor account");
+  expect(JSON.stringify(body)).not.toMatch(/endpoint/i);
+});
+
 test("regional model unavailability is a forbidden capability error", async () => {
   ctx = await startTestApp({
     sdk: { scripts: [[{ type: "send-error", message: "Model not available: provider is not supported in your region" }]] },
