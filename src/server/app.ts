@@ -10,9 +10,14 @@ import {
 import { fetchCursorSandQuota } from "../account/cursor-dashboard.js";
 import { readAccount } from "../account/service.js";
 import { CursorAccountFileStore, type StoredCursorAccount } from "../account/file-store.js";
-import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "../core/runtime-profile.js";
+import {
+  DEFAULT_RUNTIME_PROFILE,
+  resolveRequestProfile,
+  type RuntimeProfile,
+} from "../core/runtime-profile.js";
 import type { Clock } from "../clock.js";
 import type { GatewayConfig } from "../config.js";
+import { CompactAnchorStore } from "../core/compact-anchor.js";
 import { RunCoordinator } from "../core/run-coordinator.js";
 import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
@@ -39,6 +44,11 @@ import { writeSseError } from "../protocols/anthropic/sse.js";
 import { parseChatCompletionsRequest } from "../protocols/openai-chat/parse.js";
 import { writeChatStreamError } from "../protocols/openai-chat/sse.js";
 import { createChatWriterFactory } from "../protocols/openai-chat/writer.js";
+import {
+  bindCompactContinuation,
+  mintLocalCompact,
+  writeLocalCompactResponse,
+} from "../protocols/openai-responses/compact.js";
 import { parseResponsesRequest } from "../protocols/openai-responses/parse.js";
 import { writeResponsesStreamError } from "../protocols/openai-responses/sse.js";
 import { createResponsesWriterFactory } from "../protocols/openai-responses/writer.js";
@@ -142,6 +152,7 @@ export function createApp(input: {
     runDeadlineMs: config.runDeadlineMs,
   });
   const lineage = new LineageStore(config.stateDir, clock);
+  const compactStore = new CompactAnchorStore(config.stateDir, clock);
   const ordinaryJournal = new OrdinaryTurnJournal(join(config.stateDir, "ordinary-turns.json"), {
     now: () => clock.now(),
   });
@@ -316,11 +327,25 @@ export function createApp(input: {
       await run(alternate);
     }
   };
+
+  const runtimeProfileFor = (req: IncomingMessage, client: ClientAuthorization) => {
+    try {
+      return resolveRequestProfile({
+        header: headerValue(req, "x-cursor-runtime-profile"),
+        policy: config.runtimePolicy,
+        authMode: client.mode,
+      });
+    } catch (error) {
+      throw invalidRequest(error instanceof Error ? error.message : "Invalid runtime profile");
+    }
+  };
+
   let shuttingDown = false;
   const sweepTimer = setInterval(() => {
     try {
       registry.sweep();
       lineage.sweep();
+      compactStore.sweep();
       coordinator.sweepOrdinaryState();
     } catch {
       // sweep must not crash the process
@@ -609,16 +634,76 @@ export function createApp(input: {
         if (body === undefined) throw invalidRequest("JSON body is required");
         const responses = parseResponsesRequest(body);
         const sessionHint = headerValue(req, "x-cursor-session-id");
-        await runWithProviderRecovery(res, client, responses.parsed, sessionHint, (auth) =>
-          coordinator.handleMessages(
+        if (responses.compaction.trigger) {
+          const auth = await resolveAuth(client, responses.parsed, sessionHint);
+          const minted = mintLocalCompact({
+            store: compactStore,
+            account: auth.fingerprint,
+            profile: runtimeProfileFor(req, client),
+            parsed: responses,
+            sessionHint,
+          });
+          writeLocalCompactResponse({
+            res,
+            clock,
+            requestId,
+            stream: responses.parsed.stream,
+            model: responses.parsed.model,
+            token: minted.token,
+            compactId: minted.record.compactId,
+            sessionId: sessionHint,
+          });
+          return;
+        }
+        await runWithProviderRecovery(res, client, responses.parsed, sessionHint, (auth) => {
+          let hint = sessionHint;
+          if (responses.compaction.encryptedContent) {
+            const bound = bindCompactContinuation({
+              store: compactStore,
+              token: responses.compaction.encryptedContent,
+              account: auth.fingerprint,
+              profile: runtimeProfileFor(req, client),
+              parsed: responses,
+            });
+            hint = sessionHint ?? bound.sessionId;
+          }
+          return coordinator.handleMessages(
             req,
             res,
             auth,
             responses.parsed,
             requestId,
-            sessionHint,
+            hint,
             createResponsesWriterFactory(),
-          ));
+          );
+        });
+        return;
+      }
+
+      if (method === "POST" && path === "/v1/responses/compact") {
+        const client = authorizeClient(req, config);
+        const body = await readJsonBody(req, config.maxBodyBytes);
+        if (body === undefined) throw invalidRequest("JSON body is required");
+        const responses = parseResponsesRequest(body);
+        const sessionHint = headerValue(req, "x-cursor-session-id");
+        const auth = await resolveAuth(client, responses.parsed, sessionHint);
+        const minted = mintLocalCompact({
+          store: compactStore,
+          account: auth.fingerprint,
+          profile: runtimeProfileFor(req, client),
+          parsed: responses,
+          sessionHint,
+        });
+        writeLocalCompactResponse({
+          res,
+          clock,
+          requestId,
+          stream: responses.parsed.stream,
+          model: responses.parsed.model,
+          token: minted.token,
+          compactId: minted.record.compactId,
+          sessionId: sessionHint,
+        });
         return;
       }
 
@@ -638,12 +723,12 @@ export function createApp(input: {
       if (res.writableEnded || res.destroyed) return;
       if (res.headersSent) {
         if (path === "/v1/chat/completions") writeChatStreamError(res, error, requestId);
-        else if (path === "/v1/responses") writeResponsesStreamError(res, error, requestId);
+        else if (path === "/v1/responses" || path === "/v1/responses/compact") writeResponsesStreamError(res, error, requestId);
         else writeSseError(res, toPublicErrorBody(error, requestId));
         res.end();
         return;
       }
-      if (path === "/v1/chat/completions" || path === "/v1/responses") sendOpenAIError(res, error, requestId);
+      if (path === "/v1/chat/completions" || path === "/v1/responses" || path === "/v1/responses/compact") sendOpenAIError(res, error, requestId);
       else sendError(res, error, requestId);
     }
   };

@@ -1,3 +1,4 @@
+import { compactTranscriptDigest } from "../../core/compact-anchor.js";
 import { invalidRequest } from "../../errors.js";
 import { stableStringify } from "../../digest.js";
 import { collectImages, parseContinuation, parseModelParams } from "../anthropic/parse.js";
@@ -8,6 +9,16 @@ import type {
 } from "../anthropic/types.js";
 import type { ParsedResponses } from "./types.js";
 import { parseOpenAiToolChoice } from "../tool-choice.js";
+
+const UNSUPPORTED_MEDIA_TYPES = new Set([
+  "input_file",
+  "input_audio",
+  "input_video",
+  "document",
+  "audio",
+  "video",
+  "file",
+]);
 
 export function parseResponsesRequest(body: unknown): ParsedResponses {
   if (!body || typeof body !== "object") {
@@ -47,6 +58,13 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
   );
   const names = new Set(tools.flatMap((tool) => [tool.name, tool.sdk_name ?? tool.name]));
 
+  if (messages.length === 0 && !parsedInput.compactionTrigger) {
+    if (parsedInput.compactionEncryptedContent) {
+      throw invalidRequest("input must include a user message after compact context, or a compaction_trigger");
+    }
+    throw invalidRequest("input must include a user message or function_call_output");
+  }
+
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
   const terminal = messages.at(-1);
   const continuation = terminal?.role === "user" ? parseContinuation(terminal) : undefined;
@@ -57,19 +75,34 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
     names,
     "Responses",
   );
+  const systemText = systemParts.filter(Boolean).join("\n");
 
   return {
     parsed: {
       model: raw.model.trim(),
       modelParams: parseModelParams(raw),
       stream: raw.stream === true,
-      systemText: systemParts.filter(Boolean).join("\n"),
+      systemText,
       messages,
       tools,
       images,
       lastUser,
       continuation,
       toolChoice,
+    },
+    compaction: {
+      trigger: parsedInput.compactionTrigger,
+      ...(parsedInput.compactionEncryptedContent
+        ? { encryptedContent: parsedInput.compactionEncryptedContent }
+        : {}),
+      sourceDigest: compactTranscriptDigest({
+        model: raw.model.trim(),
+        systemText,
+        messages: parsedInput.sourceMessages,
+        tools,
+      }),
+      sourceMessages: parsedInput.sourceMessages,
+      sourceTools: tools,
     },
   };
 }
@@ -88,6 +121,15 @@ function rejectUnsupported(raw: Record<string, unknown>): string | undefined {
   }
   if (raw.conversation !== undefined && raw.conversation !== null) {
     throw invalidRequest("conversation is not supported");
+  }
+  if (raw.audio !== undefined) {
+    throw invalidRequest("audio is not supported");
+  }
+  if (raw.video !== undefined) {
+    throw invalidRequest("video is not supported");
+  }
+  if (raw.web_search_options !== undefined) {
+    throw invalidRequest("web_search_options is not supported");
   }
   if (raw.include !== undefined && raw.include !== null) {
     if (!Array.isArray(raw.include)) {
@@ -173,7 +215,7 @@ function parseResponsesTool(value: unknown): AnthropicTool {
   }
   if (raw.type !== "function") {
     throw invalidRequest(
-      `unsupported Responses tool type: ${String(raw.type)}; hosted tools (web_search, file_search, computer, shell, apply_patch) are not implemented`,
+      `unsupported Responses tool type: ${String(raw.type)}; hosted tools (web_search, file_search, x_search, computer, shell, apply_patch) are not implemented`,
     );
   }
   const nested = raw.function && typeof raw.function === "object" ? (raw.function as Record<string, unknown>) : undefined;
@@ -201,30 +243,47 @@ function parseResponsesTool(value: unknown): AnthropicTool {
 
 function parseInput(input: unknown): {
   messages: AnthropicMessage[];
+  sourceMessages: AnthropicMessage[];
   systemParts: string[];
   additionalTools: AnthropicTool[];
+  compactionTrigger: boolean;
+  compactionEncryptedContent?: string;
 } {
   if (typeof input === "string") {
     if (!input.trim()) throw invalidRequest("input must be a non-empty string or item array");
-    return { messages: [{ role: "user", content: input }], systemParts: [], additionalTools: [] };
+    const messages = [{ role: "user" as const, content: input }];
+    return {
+      messages,
+      sourceMessages: [...messages],
+      systemParts: [],
+      additionalTools: [],
+      compactionTrigger: false,
+    };
   }
   if (!Array.isArray(input) || input.length === 0) {
     throw invalidRequest("input must be a non-empty string or item array");
   }
   const messages: AnthropicMessage[] = [];
+  const sourceMessages: AnthropicMessage[] = [];
   const systemParts: string[] = [];
   const additionalTools: AnthropicTool[] = [];
+  let compactionTrigger = false;
+  let compactionEncryptedContent: string | undefined;
   let pendingResults: Extract<AnthropicContentBlock, { type: "tool_result" }>[] = [];
   let pendingAssistant: AnthropicContentBlock[] = [];
 
+  const pushMessage = (message: AnthropicMessage) => {
+    sourceMessages.push(message);
+    messages.push(message);
+  };
   const flushResults = () => {
     if (pendingResults.length === 0) return;
-    messages.push({ role: "user", content: pendingResults });
+    pushMessage({ role: "user", content: pendingResults });
     pendingResults = [];
   };
   const flushAssistant = () => {
     if (pendingAssistant.length === 0) return;
-    messages.push(packAssistant(pendingAssistant));
+    pushMessage(packAssistant(pendingAssistant));
     pendingAssistant = [];
   };
 
@@ -232,12 +291,31 @@ function parseInput(input: unknown): {
     if (!item || typeof item !== "object") throw invalidRequest("each input item must be an object");
     const raw = item as Record<string, unknown>;
     const type = typeof raw.type === "string" ? raw.type : inferItemType(raw);
+    rejectUnsupportedMediaType(type);
 
     if (type === "additional_tools") {
       if (!Array.isArray(raw.tools)) {
         throw invalidRequest("additional_tools.tools must be an array");
       }
       additionalTools.push(...raw.tools.flatMap(parseAdditionalTool));
+      continue;
+    }
+
+    if (type === "compaction_trigger") {
+      flushResults();
+      flushAssistant();
+      compactionTrigger = true;
+      continue;
+    }
+
+    if (type === "compaction") {
+      flushResults();
+      flushAssistant();
+      if (typeof raw.encrypted_content !== "string" || !raw.encrypted_content.trim()) {
+        throw invalidRequest("compaction item must include encrypted_content");
+      }
+      compactionEncryptedContent = raw.encrypted_content.trim();
+      messages.length = 0;
       continue;
     }
 
@@ -261,12 +339,16 @@ function parseInput(input: unknown): {
     if (type === "input_text") {
       flushAssistant();
       if (typeof raw.text !== "string") throw invalidRequest("input_text requires text");
-      messages.push({ role: "user", content: raw.text });
+      pushMessage({ role: "user", content: raw.text });
       continue;
     }
     if (type === "message" || type === "easy_input_message") {
       flushAssistant();
+      const before = messages.length;
       pushMessageItem(messages, systemParts, raw);
+      if (messages.length > before) {
+        sourceMessages.push(messages[messages.length - 1]!);
+      }
       continue;
     }
     throw invalidRequest(`unsupported input item type: ${String(type)}`);
@@ -274,10 +356,20 @@ function parseInput(input: unknown): {
 
   flushResults();
   flushAssistant();
-  if (messages.length === 0) {
-    throw invalidRequest("input must include a user message or function_call_output");
+  return {
+    messages,
+    sourceMessages,
+    systemParts,
+    additionalTools,
+    compactionTrigger,
+    ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+  };
+}
+
+function rejectUnsupportedMediaType(type: string): void {
+  if (UNSUPPORTED_MEDIA_TYPES.has(type)) {
+    throw invalidRequest(`${type} is not supported`);
   }
-  return { messages, systemParts, additionalTools };
 }
 
 function parseAdditionalTool(value: unknown): AnthropicTool[] {
@@ -494,6 +586,8 @@ function parseUserContent(content: unknown): AnthropicContentBlock[] {
 function parseUserPart(part: unknown): AnthropicContentBlock {
   if (!part || typeof part !== "object") throw invalidRequest("content part must be an object");
   const raw = part as Record<string, unknown>;
+  const type = typeof raw.type === "string" ? raw.type : "";
+  rejectUnsupportedMediaType(type);
   if (raw.type === "input_text" || raw.type === "text" || raw.type === "output_text") {
     if (typeof raw.text !== "string") throw invalidRequest("text part requires text");
     return { type: "text", text: raw.text };
@@ -513,6 +607,8 @@ function parseAssistantContent(content: unknown): AnthropicContentBlock[] {
   return content.map((part) => {
     if (!part || typeof part !== "object") throw invalidRequest("content part must be an object");
     const raw = part as Record<string, unknown>;
+    const type = typeof raw.type === "string" ? raw.type : "";
+    rejectUnsupportedMediaType(type);
     if (raw.type === "output_text" || raw.type === "text" || raw.type === "input_text") {
       if (typeof raw.text !== "string") throw invalidRequest("text part requires text");
       return { type: "text", text: raw.text };
