@@ -1017,6 +1017,11 @@ export class RunCoordinator {
       this.persistLineage(session);
     }
     if (boundary.type === "error") {
+      try {
+        writer.fail(boundary.error);
+      } catch {
+        // client may already be gone
+      }
       throw boundary.error;
     }
     try {

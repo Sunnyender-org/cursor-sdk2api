@@ -1,4 +1,5 @@
 import type { TurnWriter, TurnWriterContext } from "../../core/turn-writer.js";
+import { toPublicErrorBody } from "../../errors.js";
 import { sendError, sendJson } from "../../server/http-util.js";
 import { encodeMessage } from "./encode.js";
 import {
@@ -8,6 +9,7 @@ import {
   writeMessageStop,
   writeCompletedTurn,
   writeSseError,
+  writeTerminalStop,
   writeTextDelta,
   writeThinkingDelta,
   writeToolUse,
@@ -20,6 +22,7 @@ export function createAnthropicWriter(ctx: TurnWriterContext): TurnWriter {
 
 class AnthropicTurnWriter implements TurnWriter {
   private started = false;
+  private failed = false;
   private nextIndex = 0;
   private open?: { kind: "thinking" | "text"; index: number };
   private emitted = new Set<"thinking" | "text">();
@@ -80,9 +83,12 @@ class AnthropicTurnWriter implements TurnWriter {
   }
 
   fail(error: unknown): void {
-    if (this.dead()) return;
+    if (this.failed || this.dead()) return;
+    this.failed = true;
     if (this.ctx.stream && this.ctx.res.headersSent) {
-      writeSseError(this.ctx.res, error);
+      this.closeOpen();
+      writeTerminalStop(this.ctx.res);
+      writeSseError(this.ctx.res, toPublicErrorBody(error, this.ctx.requestId));
       this.ctx.res.end();
       return;
     }

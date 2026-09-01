@@ -1,10 +1,13 @@
+import type { ServerResponse } from "node:http";
 import { afterEach, expect, test } from "vitest";
+import { createAnthropicWriter } from "../../src/protocols/anthropic/writer.js";
 import { api, closeTestApp, parseSse, startTestApp, type TestContext } from "../helpers/app.js";
 
-let ctx: TestContext;
+let ctx: TestContext | undefined;
 
 afterEach(async () => {
   if (ctx) await closeTestApp(ctx);
+  ctx = undefined;
 });
 
 test("non-stream text returns an assistant message", async () => {
@@ -283,4 +286,100 @@ test("empty semantic output fails closed", async () => {
   expect(res.status).toBe(502);
   expect(body.error.type).toBe("cursor_empty_turn");
   expect(body.request_id).toBeTruthy();
+});
+
+test("in-stream error closes open blocks and sends message_stop before error", async () => {
+  ctx = await startTestApp({
+    sdk: { scripts: [[{ type: "text", chunks: ["partial"] }, { type: "error", message: "upstream failed" }]] },
+  });
+  const res = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      stream: true,
+      messages: [{ role: "user", content: "go" }],
+    }),
+  });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("text/event-stream");
+  const events = parseSse(await res.text());
+  expect(events.map((event) => event.event)).toEqual([
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop",
+    "error",
+  ]);
+  expect(events.find((event) => event.event === "content_block_delta")?.data).toMatchObject({
+    delta: { type: "text_delta", text: "partial" },
+  });
+  expect(events.find((event) => event.event === "message_delta")?.data).toMatchObject({
+    type: "message_delta",
+    delta: { stop_reason: null, stop_sequence: null },
+    usage: { output_tokens: 0 },
+  });
+  expect(events.at(-1)?.data).toMatchObject({
+    type: "error",
+    error: { type: "cursor_upstream_error", message: "upstream failed" },
+  });
+});
+
+test("in-stream error writes one SSE error and ends the response once", async () => {
+  ctx = await startTestApp({
+    sdk: { scripts: [[{ type: "text", chunks: ["partial"] }, { type: "error", message: "upstream failed" }]] },
+  });
+  const res = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      stream: true,
+      messages: [{ role: "user", content: "go" }],
+    }),
+  });
+  const body = await res.text();
+  expect(res.status).toBe(200);
+  expect((body.match(/^event: error$/gm) ?? []).length).toBe(1);
+  const events = parseSse(body);
+  expect(events.filter((event) => event.event === "error")).toHaveLength(1);
+  expect(events.filter((event) => event.event === "message_stop")).toHaveLength(1);
+  expect(events.at(-1)?.event).toBe("error");
+});
+
+test("Anthropic fail is a no-op after it has already ended the response", () => {
+  const chunks: string[] = [];
+  let endCount = 0;
+  const res = {
+    headersSent: false,
+    destroyed: false,
+    writableEnded: false,
+    writeHead() {
+      this.headersSent = true;
+    },
+    write(chunk: string) {
+      chunks.push(String(chunk));
+      return true;
+    },
+    end() {
+      endCount += 1;
+      this.writableEnded = true;
+    },
+  };
+  const writer = createAnthropicWriter({
+    res: res as unknown as ServerResponse,
+    requestId: "req_test",
+    stream: true,
+    messageId: "msg_test",
+    session: { sessionId: "ses_test", modelId: "composer-2.5", createdAt: 0 },
+  });
+  writer.onText?.("partial");
+  writer.fail(new Error("upstream failed"));
+  writer.fail(new Error("second failure"));
+  expect(endCount).toBe(1);
+  const body = chunks.join("");
+  expect((body.match(/^event: error$/gm) ?? []).length).toBe(1);
+  expect((body.match(/^event: message_stop$/gm) ?? []).length).toBe(1);
 });
