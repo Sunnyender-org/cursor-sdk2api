@@ -357,7 +357,7 @@ export class FakeSdk implements SdkRuntime {
     if (keyedError) throw configuredError(keyedError);
     if (this.options.createError) throw configuredError(this.options.createError);
     this.lastCreate = input;
-    this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames);
+    this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames, input.hostedSearch === true);
     const agent = new FakeAgent(
       input,
       this.takeScripts([[{ type: "text", chunks: ["hello"] }]]),
@@ -372,7 +372,7 @@ export class FakeSdk implements SdkRuntime {
     if (this.options.resumeError) throw configuredError(this.options.resumeError);
     this.lastResume = input;
     this.resumeCalls.push(input);
-    this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames);
+    this.lastAllowlist = apiProfileToolAllowlist(input.clientToolNames, input.hostedSearch === true);
     for (const call of this.options.resumeEarlyToolCalls ?? []) {
       const tool = input.customTools[call.name];
       if (!tool) throw new Error(`fake sdk missing resume tool ${call.name}`);

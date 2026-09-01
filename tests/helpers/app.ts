@@ -28,6 +28,8 @@ export async function startTestApp(
     captureLogs?: boolean;
     beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
     fetchSandQuota?: (apiKey: string) => Promise<CursorSandResult>;
+    sandHealth?: import("../../src/sdk/sand-loader.js").SandLoaderHealth;
+    assertSandAccess?: (apiKey: string) => Promise<void>;
   } = {},
 ): Promise<TestContext> {
   const clock = options.clock ?? new SystemClock();
@@ -62,6 +64,12 @@ export async function startTestApp(
     workspaceDir: mkdtempSync(join(tmpdir(), "cursor-sdk2api-test-")),
     beforeApplyBoundary: options.beforeApplyBoundary,
     fetchSandQuota: options.fetchSandQuota ?? (async () => UNAVAILABLE_GROK_BOT),
+    sandHealth: options.sandHealth ?? {
+      ready: true,
+      sdk_version: "1.0.30",
+      patch_contract_version: "1.0.30",
+    },
+    assertSandAccess: options.assertSandAccess,
   });
   const server = createServer((req, res) => {
     void app.handler(req, res);

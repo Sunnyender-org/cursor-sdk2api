@@ -78,6 +78,13 @@ test("health reports runtime capability truth without account data", async () =>
   expect(body.verification).not.toHaveProperty("contract_tests");
   expect(JSON.stringify(body)).not.toContain("spending");
   expect(JSON.stringify(body)).not.toContain("email");
+  expect(JSON.stringify(body)).not.toMatch(/\/Users\/|node_modules|STATE_DIR|sand-sdk/);
+  const profiles = (body as { profiles?: { default?: string; sdk?: { ready?: boolean }; sand?: { ready?: boolean; sdk_version?: string; patch_contract_version?: string } } }).profiles;
+  expect(profiles?.default).toBe("sdk");
+  expect(profiles?.sdk?.ready).toBe(true);
+  expect(profiles?.sand?.sdk_version).toBe("1.0.30");
+  expect(profiles?.sand?.patch_contract_version).toBe("1.0.30");
+  expect(typeof profiles?.sand?.ready).toBe("boolean");
 });
 
 test("health capabilities follow runtime config, not marketing constants", async () => {

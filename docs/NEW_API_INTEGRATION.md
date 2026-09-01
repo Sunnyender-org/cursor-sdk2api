@@ -58,6 +58,15 @@ Cursor account key. The gateway chooses a compatible account from its
 persistent pool for each new session and keeps tool continuation and resume on
 that same account.
 
+v0.4 channel extras, documented in the template `gateway` object:
+
+- Default runtime is `sdk`. Do not send `x-cursor-runtime-profile` unless the
+  gateway was started with `ALLOW_REQUEST_RUNTIME_PROFILE=true`.
+- Grok Bot weekly quota is a separate account field from Cursor period quota.
+- `POST /v1/responses/compact` returns one `{ type: "compaction", encrypted_content: "csgw1...." }` item.
+- If the upper layer bills, use terminal usage plus the provider receipt. Do
+  not infer consumption from HTTP retry counts.
+
 The JSON files under `integrations/new-api/channel.*.template.json` document
 the current API fields. They intentionally contain a non-working placeholder;
 replace it only in a local protected copy or use the UI. Do not commit the

@@ -10,5 +10,13 @@
     "priority": 0,
     "weight": 0,
     "auto_ban": 0
+  },
+  "gateway": {
+    "default_runtime_profile": "sdk",
+    "allow_request_runtime_profile": false,
+    "x-cursor-runtime-profile": "sdk|sand when ALLOW_REQUEST_RUNTIME_PROFILE=true",
+    "hosted_search_mode": "off",
+    "compact": "POST /v1/responses/compact returns one compaction item with csgw1. encrypted_content",
+    "receipt": "Bill from terminal usage plus provider receipt; do not infer consumption from HTTP retries"
   }
 }

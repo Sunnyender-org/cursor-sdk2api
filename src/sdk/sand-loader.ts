@@ -1,5 +1,5 @@
 import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve, sep } from "node:path";
 import { sha256Hex } from "../digest.js";
@@ -9,6 +9,7 @@ import {
   SAND_SDK_VERSION,
   sandSdkPatchContract,
 } from "./sand-patch-contract.js";
+import { sandSdkCloneDir } from "./sand-paths.js";
 
 export {
   SAND_SDK_PACKAGE_NAME,
@@ -323,4 +324,48 @@ export async function createSandSdkClone(options: {
     replacementCount: asserted.replacementCount,
     files: asserted.files,
   };
+}
+
+export interface SandLoaderHealth {
+  ready: boolean;
+  sdk_version: string;
+  patch_contract_version: string;
+  reason?: SandLoaderMismatchReason;
+}
+
+export function inspectSandLoader(sourceDir?: string): SandLoaderHealth {
+  const version = {
+    sdk_version: SAND_SDK_VERSION,
+    patch_contract_version: SAND_SDK_VERSION,
+  };
+  try {
+    const resolved = sourceDir ?? resolveInstalledCursorSdkDir();
+    assertSandContract(resolved);
+    return { ready: true, ...version };
+  } catch (error) {
+    const reason = error instanceof SandLoaderContractError ? error.reason : "missing_file";
+    return { ready: false, ...version, reason };
+  }
+}
+
+function cloneMatchesContract(targetDir: string): boolean {
+  try {
+    for (const fileContract of sandSdkPatchContract.files) {
+      const written = readFileSync(join(targetDir, fileContract.file), "utf8");
+      if (sha256Hex(written) !== fileContract.targetSha256) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureSandSdkClone(stateDir: string, sourceDir?: string): Promise<string> {
+  const resolvedSource = sourceDir ?? resolveInstalledCursorSdkDir();
+  assertSandContract(resolvedSource);
+  const targetDir = sandSdkCloneDir(stateDir);
+  if (cloneMatchesContract(targetDir)) return targetDir;
+  rmSync(targetDir, { recursive: true, force: true });
+  await createSandSdkClone({ sourceDir: resolvedSource, targetDir });
+  return targetDir;
 }

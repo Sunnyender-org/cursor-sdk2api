@@ -1,3 +1,5 @@
+import type { RuntimeProfile } from "../core/runtime-profile.js";
+
 export const AMBIENT_DISALLOWED_TOOLS = [
   "shell",
   "read",
@@ -125,6 +127,8 @@ export interface CreateAgentInput {
   workspaceDir: string;
   clientToolNames: string[];
   customTools: Record<string, SdkCustomTool>;
+  runtimeProfile?: RuntimeProfile;
+  hostedSearch?: boolean;
 }
 
 export interface ResumeAgentInput extends CreateAgentInput {
@@ -155,6 +159,13 @@ export interface SdkRuntime {
   probeCredential(apiKey: string): Promise<"valid" | "invalid" | "unavailable">;
 }
 
-export function apiProfileToolAllowlist(clientToolNames: string[]): string[] {
-  return clientToolNames.length > 0 ? ["mcp"] : [];
+export function apiProfileToolAllowlist(clientToolNames: string[], hostedSearch = false): string[] {
+  const names = clientToolNames.length > 0 ? ["mcp"] : [];
+  if (hostedSearch) names.push("webSearch", "webFetch");
+  return names;
+}
+
+export function ambientDisallowedTools(hostedSearch = false): string[] {
+  if (!hostedSearch) return [...AMBIENT_DISALLOWED_TOOLS];
+  return AMBIENT_DISALLOWED_TOOLS.filter((name) => name !== "webSearch" && name !== "webFetch");
 }

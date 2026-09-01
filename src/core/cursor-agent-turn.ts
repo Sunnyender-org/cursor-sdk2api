@@ -11,6 +11,7 @@ import {
   normalizeModelParams,
   sessionPolicyFingerprintFromParsed,
 } from "./session-policy.js";
+import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "./runtime-profile.js";
 
 export const CURSOR_AGENT_TURN_VERSION = 1;
 export const CURSOR_AGENT_ROUTE = "cursor-agent";
@@ -264,7 +265,7 @@ export function nextCursorAgentTurnLineageKey(turn: CursorAgentTurn, assistantAn
 
 export function cursorAgentTurnFromParsed(
   parsed: ParsedMessages,
-  extras: { tenantScope: string; sourceProtocol?: string } = { tenantScope: "" },
+  extras: { tenantScope: string; sourceProtocol?: string; runtimeProfile?: RuntimeProfile } = { tenantScope: "" },
 ): CursorAgentTurn {
   const conversation = parsed.messages;
   const userIndex = lastUserIndex(conversation);
@@ -295,7 +296,11 @@ export function cursorAgentTurnFromParsed(
       historyDigest: historyDigestBeforeCurrentUser(parsed.systemText, conversation, userIndex),
       turnIndex,
       toolCatalogDigest,
-      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(
+        parsed,
+        parsed.modelParams,
+        extras.runtimeProfile ?? DEFAULT_RUNTIME_PROFILE,
+      ),
     },
   };
   turn.lineage.requestDigest = digestCursorAgentTurnRequest(turn);

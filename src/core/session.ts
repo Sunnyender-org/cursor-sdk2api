@@ -64,6 +64,7 @@ export class Session {
   retainOrdinaryAgent = false;
   retainUntil = 0;
   runtimeProfile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE;
+  hostedSearch = false;
   logicalKey?: string;
   ledgerRunId?: string;
   ledgerGeneration = 0;
@@ -77,6 +78,7 @@ export class Session {
     instanceId: string;
     clock: Clock;
     sessionId?: string;
+    runtimeProfile?: RuntimeProfile;
   }) {
     this.sessionId = input.sessionId ?? sessionId();
     this.credentialFingerprint = input.credentialFingerprint;
@@ -85,6 +87,7 @@ export class Session {
     this.sessionPolicyFingerprint = input.sessionPolicyFingerprint;
     this.executableToolCatalogFingerprint = input.executableToolCatalogFingerprint;
     this.instanceId = input.instanceId;
+    this.runtimeProfile = input.runtimeProfile ?? DEFAULT_RUNTIME_PROFILE;
     this.createdAt = input.clock.now();
     this.lastActivityAt = this.createdAt;
   }

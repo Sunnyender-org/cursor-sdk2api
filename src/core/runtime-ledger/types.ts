@@ -1,9 +1,11 @@
+import { isRuntimeProfile as isKnownRuntimeProfile, parseRuntimeLedgerV2, type RuntimeProfile } from "../runtime-profile.js";
+
 export const RUNTIME_DB_FILENAME = "runtime.db";
 export const RUNTIME_QUARANTINE_DIR = "runtime-quarantine";
 export const RUNTIME_LEDGER_BUSY_TIMEOUT_MS = 5_000;
 export const RUNTIME_LEDGER_SCHEMA_VERSION = 1;
 
-export type RuntimeProfile = "sdk" | "sand";
+export type { RuntimeProfile };
 
 export type AgentState = "active" | "retired";
 
@@ -149,7 +151,7 @@ export const TERMINAL_RUN_STATES = new Set<RunState>(["finished", "error", "runt
 export const ACTIVE_RUN_STATES = new Set<RunState>(["running", "awaiting_tool_results"]);
 
 export function isRuntimeProfile(value: string): value is RuntimeProfile {
-  return value === "sdk" || value === "sand";
+  return isKnownRuntimeProfile(value);
 }
 
 export function isAgentState(value: string): value is AgentState {
@@ -175,8 +177,5 @@ export function isInteractionState(value: string): value is InteractionState {
 }
 
 export function runtimeLedgerV2Enabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env.RUNTIME_LEDGER_V2;
-  if (raw == null || raw === "") return true;
-  const value = raw.trim().toLowerCase();
-  return !["0", "false", "no", "off"].includes(value);
+  return parseRuntimeLedgerV2(env);
 }

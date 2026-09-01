@@ -85,4 +85,5 @@ export interface ParsedMessages {
   lastUser: AnthropicMessage | undefined;
   continuation: ParsedToolResult[] | undefined;
   toolChoice: import("../tool-choice.js").ToolChoicePolicy;
+  hostedSearch?: boolean;
 }

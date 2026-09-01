@@ -1,4 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildGrokContinuation,
   buildGrokFirstRequest,
@@ -6,6 +9,8 @@ import {
   buildSonnetFirstRequest,
   buildTextRequest,
 } from "../../integrations/new-api/smoke.mjs";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("new-api smoke contracts", () => {
   test("text targets the OpenAI-compatible endpoint", () => {
@@ -39,5 +44,18 @@ describe("new-api smoke contracts", () => {
       }],
     });
     expect(continuation.body.messages.slice(-2).map((message: { tool_call_id: string }) => message.tool_call_id)).toEqual(["call_a", "call_b"]);
+  });
+
+  test("channel templates document profile, compact, and receipt without secrets", () => {
+    for (const name of ["channel.openai.template.json", "channel.anthropic.template.json"]) {
+      const body = JSON.parse(readFileSync(join(repoRoot, "integrations/new-api", name), "utf8")) as {
+        channel: { key: string };
+        gateway: { default_runtime_profile: string; compact: string; receipt: string };
+      };
+      expect(body.channel.key).toBe("<GATEWAY_ACCESS_KEY>");
+      expect(body.gateway.default_runtime_profile).toBe("sdk");
+      expect(body.gateway.compact.length).toBeGreaterThan(10);
+      expect(body.gateway.receipt).toMatch(/provider receipt/);
+    }
   });
 });

@@ -7,6 +7,7 @@ import type { AuthContext } from "../auth/credentials.js";
 import { digestJson } from "../digest.js";
 import {
   GatewayError,
+  forbiddenError,
   invalidRequest,
   sdkFailure,
   sessionConflict,
@@ -36,13 +37,20 @@ import { batchDigest } from "./tool-bridge.js";
 import { buildTranscriptRecovery } from "./transcript-recovery.js";
 import type { LineageRecord, LineageStore } from "./lineage-store.js";
 import type { RuntimeLedger } from "./runtime-ledger.js";
-import { DEFAULT_RUNTIME_PROFILE } from "./runtime-profile.js";
+import {
+  DEFAULT_RUNTIME_PROFILE,
+  resolveRequestProfile,
+  type RuntimeProfile,
+} from "./runtime-profile.js";
 import type { TurnWriter, TurnWriterFactory, TurnWriterSession } from "./turn-writer.js";
 import {
   executableToolCatalogFingerprint,
   sessionPolicyFingerprintFromParsed,
 } from "./session-policy.js";
 import { toLedgerUsage } from "./usage.js";
+import { headerValue } from "../server/http-util.js";
+import type { SandLoaderHealth } from "../sdk/sand-loader.js";
+import { sandWorkspaceDir } from "../sdk/sand-paths.js";
 
 interface OrdinaryReplayEntry {
   turn: NonNullable<Session["replay"]>["turn"];
@@ -67,6 +75,8 @@ export interface CoordinatorDeps {
   lineage?: LineageStore;
   ordinaryJournal?: OrdinaryTurnJournal;
   ledger?: RuntimeLedger;
+  sandHealth?: SandLoaderHealth;
+  assertSandAccess?: (apiKey: string) => Promise<void>;
   /** Test-only gate between waitForBoundary and state transition. */
   beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
 }
@@ -147,7 +157,10 @@ export class RunCoordinator {
       await this.continueTurn(req, res, auth, parsed, parsed.continuation, requestId, writerFactory);
       return;
     }
-    const turn = cursorAgentTurnFromParsed(parsed, { tenantScope: auth.fingerprint });
+    const turn = cursorAgentTurnFromParsed(parsed, {
+      tenantScope: auth.fingerprint,
+      runtimeProfile: this.requestProfile(req, auth),
+    });
     if (this.deps.config.ordinaryTurnCoordinator && this.deps.ordinaryJournal) {
       const handled = await this.handleOrdinaryTurn(
         req,
@@ -426,8 +439,10 @@ export class RunCoordinator {
     if (parent.sessionPolicyFingerprint !== turn.lineage.sessionPolicyFingerprint) {
       throw sessionConflict("session policy does not match the ordinary-turn owner");
     }
+    const profile = this.requestProfile(req, auth);
     this.deps.registry.assertCanActivateRun({
       credentialFingerprint: auth.fingerprint,
+      runtimeProfile: profile,
     });
     const session = this.deps.registry.create({
       credentialFingerprint: auth.fingerprint,
@@ -435,6 +450,7 @@ export class RunCoordinator {
       modelParams: parsed.modelParams,
       sessionPolicyFingerprint: turn.lineage.sessionPolicyFingerprint,
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
+      runtimeProfile: profile,
     });
     session.ordinaryReplayOwner = turn;
     await this.followUp(
@@ -451,7 +467,7 @@ export class RunCoordinator {
           type: "resume",
           agentId: parent.agentId,
           apiKey: auth.cursorApiKey,
-          workspaceDir: this.deps.workspaceDir,
+          workspaceDir: this.workspaceFor(profile),
         },
         afterAgentReady: () => {
           this.traceOrdinary({
@@ -560,15 +576,18 @@ export class RunCoordinator {
     if (await this.tryReconnectLogicalRun(req, res, parsed, requestId, writerFactory, logicalKey)) {
       return;
     }
+    const profile = this.requestProfile(req, auth);
     const session = this.deps.registry.create({
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
-      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed, parsed.modelParams, profile),
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
+      runtimeProfile: profile,
     });
     session.logicalKey = logicalKey;
-    session.runtimeProfile = DEFAULT_RUNTIME_PROFILE;
+    session.runtimeProfile = profile;
+    session.hostedSearch = parsed.hostedSearch === true;
     if (ordinaryTurn) session.ordinaryReplayOwner = ordinaryTurn;
     try {
       const prompt = sendOverride ?? renderPrompt(parsed);
@@ -576,7 +595,7 @@ export class RunCoordinator {
         {
           session,
           tools: parsed.tools,
-          agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.deps.workspaceDir },
+          agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.workspaceFor(profile) },
           send: prompt,
         },
         logicalKey,
@@ -601,7 +620,7 @@ export class RunCoordinator {
     writerFactory: TurnWriterFactory,
     options: FollowUpOptions = {},
   ): Promise<void> {
-    this.assertIdentity(session, auth, parsed);
+    this.assertIdentity(req, session, auth, parsed);
     const logicalKey = this.logicalKeyFor(auth, parsed);
     if (await this.tryReconnectLogicalRun(req, res, parsed, requestId, writerFactory, logicalKey)) {
       return;
@@ -739,7 +758,7 @@ export class RunCoordinator {
   ): Promise<void> {
     const ids = results.map((result) => result.toolUseId);
     this.deps.registry.requireLive(session, ids);
-    this.assertPendingIdentity(session, auth, parsed);
+    this.assertPendingIdentity(req, session, auth, parsed);
 
     const digest = batchDigest(results);
     if (session.lastResultDigest && session.lastResultDigest !== digest) {
@@ -839,13 +858,16 @@ export class RunCoordinator {
     results: ParsedToolResult[],
     recovery: ReturnType<typeof buildTranscriptRecovery>,
   ): Promise<{ session: Session; pump: EventPump }> {
+    const profile = this.requestProfileFromAuth(auth);
     const session = this.deps.registry.create({
       credentialFingerprint: auth.fingerprint,
       modelId: parsed.model,
       modelParams: parsed.modelParams,
-      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed),
+      sessionPolicyFingerprint: sessionPolicyFingerprintFromParsed(parsed, parsed.modelParams, profile),
       executableToolCatalogFingerprint: executableToolCatalogFingerprint(parsed.tools),
+      runtimeProfile: profile,
     });
+    session.hostedSearch = parsed.hostedSearch === true;
     this.beginOrdinaryReplaySegment(session, auth, parsed);
     session.lastResultDigest = batchDigest(results);
     try {
@@ -853,7 +875,7 @@ export class RunCoordinator {
         {
           session,
           tools: parsed.tools,
-          agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.deps.workspaceDir },
+          agent: { type: "create", apiKey: auth.cursorApiKey, workspaceDir: this.workspaceFor(profile) },
           send: { text: recovery.prompt, images: parsed.images },
           completedResults: recovery.completedResults,
         },
@@ -929,7 +951,11 @@ export class RunCoordinator {
     record: LineageRecord,
     digest: string,
   ): Promise<{ session: Session; pump: EventPump }> {
-    this.deps.registry.assertCanActivateRun({ credentialFingerprint: record.credentialFingerprint });
+    const boundProfile = record.runtimeProfile ?? DEFAULT_RUNTIME_PROFILE;
+    this.deps.registry.assertCanActivateRun({
+      credentialFingerprint: record.credentialFingerprint,
+      runtimeProfile: boundProfile,
+    });
     const session = new Session({
       sessionId: record.sessionId,
       credentialFingerprint: record.credentialFingerprint,
@@ -939,6 +965,7 @@ export class RunCoordinator {
       executableToolCatalogFingerprint: record.executableToolCatalogFingerprint,
       instanceId: this.deps.registry.instanceId,
       clock: this.deps.clock,
+      runtimeProfile: boundProfile,
     });
     session.state = "resuming";
     this.beginOrdinaryReplaySegment(session, auth, parsed);
@@ -954,7 +981,7 @@ export class RunCoordinator {
             type: "resume",
             agentId: record.sdkAgentId,
             apiKey: auth.cursorApiKey,
-            workspaceDir: this.deps.workspaceDir,
+            workspaceDir: this.workspaceFor(boundProfile),
           },
           send: { text: recoveredToolResultPrompt(record, results), force: true },
         },
@@ -1080,8 +1107,9 @@ export class RunCoordinator {
     if (record.credentialFingerprint !== auth.fingerprint || record.modelId !== parsed.model) {
       throw sessionConflict("credential or model does not match the stored session");
     }
+    const boundProfile = record.runtimeProfile ?? DEFAULT_RUNTIME_PROFILE;
     const effectiveParams = parsed.modelParams.length > 0 ? parsed.modelParams : record.modelParams ?? [];
-    if (record.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams)) {
+    if (record.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams, boundProfile)) {
       throw sessionConflict("session policy does not match the stored session");
     }
     if (parsed.modelParams.length > 0 && !sameModelParams(record.modelParams ?? [], parsed.modelParams)) {
@@ -1092,6 +1120,7 @@ export class RunCoordinator {
     }
     this.deps.registry.assertCanActivateRun({
       credentialFingerprint: record.credentialFingerprint,
+      runtimeProfile: boundProfile,
     });
     const session = new Session({
       sessionId: record.sessionId,
@@ -1102,6 +1131,7 @@ export class RunCoordinator {
       executableToolCatalogFingerprint: record.executableToolCatalogFingerprint,
       instanceId: this.deps.registry.instanceId,
       clock: this.deps.clock,
+      runtimeProfile: boundProfile,
     });
     this.deps.registry.adopt(session);
     await this.followUp(req, res, auth, parsed, session, requestId, writerFactory, {
@@ -1109,7 +1139,7 @@ export class RunCoordinator {
         type: "resume",
         agentId: record.sdkAgentId,
         apiKey: auth.cursorApiKey,
-        workspaceDir: this.deps.workspaceDir,
+        workspaceDir: this.workspaceFor(boundProfile),
       },
       failureReason: "resume_failed",
     });
@@ -1136,6 +1166,7 @@ export class RunCoordinator {
       ...(session.modelParams.length > 0 ? { modelParams: session.modelParams } : {}),
       sessionPolicyFingerprint: session.sessionPolicyFingerprint,
       executableToolCatalogFingerprint: session.executableToolCatalogFingerprint,
+      runtimeProfile: session.runtimeProfile,
       state: session.state as LineageRecord["state"],
       pendingToolIds:
         session.state === "awaiting_tool_results" ? [...session.pending.keys()] : [],
@@ -1191,27 +1222,32 @@ export class RunCoordinator {
     }
     session.ordinaryReplayOwner = cursorAgentTurnFromParsed(parsed, {
       tenantScope: auth.fingerprint,
+      runtimeProfile: session.runtimeProfile,
     });
   }
 
   private assertIdentity(
+    req: IncomingMessage,
     session: Session,
     auth: AuthContext,
     parsed: ParsedMessages,
   ): void {
     this.assertModelIdentity(session, auth, parsed);
+    this.assertBoundProfile(req, session);
     const effectiveParams = parsed.modelParams.length > 0 ? parsed.modelParams : session.modelParams;
-    if (session.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams)) {
+    if (session.sessionPolicyFingerprint !== sessionPolicyFingerprintFromParsed(parsed, effectiveParams, session.runtimeProfile)) {
       throw sessionConflict("session policy does not match the session owner");
     }
   }
 
   private assertPendingIdentity(
+    req: IncomingMessage,
     session: Session,
     auth: AuthContext,
     parsed: ParsedMessages,
   ): void {
     this.assertModelIdentity(session, auth, parsed);
+    this.assertBoundProfile(req, session);
     if (
       parsed.tools.length > 0 &&
       session.executableToolCatalogFingerprint !== executableToolCatalogFingerprint(parsed.tools)
@@ -1248,7 +1284,10 @@ export class RunCoordinator {
   }
 
   private logicalKeyFor(auth: AuthContext, parsed: ParsedMessages): string {
-    return ordinaryReplayKey(cursorAgentTurnFromParsed(parsed, { tenantScope: auth.fingerprint }));
+    return ordinaryReplayKey(cursorAgentTurnFromParsed(parsed, {
+      tenantScope: auth.fingerprint,
+      runtimeProfile: this.requestProfileFromAuth(auth),
+    }));
   }
 
   private findSessionByLogicalKey(logicalKey: string): Session | undefined {
@@ -1260,10 +1299,55 @@ export class RunCoordinator {
 
   private async startAndBind(input: DriveSdkRunInput, logicalKey: string): Promise<EventPump> {
     input.session.logicalKey = logicalKey;
-    input.session.runtimeProfile = DEFAULT_RUNTIME_PROFILE;
+    await this.ensureSandRun(input);
     const pump = await this.sdkRunDriver.start(input);
     this.bindLedgerAfterSend(input.session, logicalKey);
     return pump;
+  }
+
+  private requestProfile(req: IncomingMessage, auth: AuthContext): RuntimeProfile {
+    return resolveRequestProfile({
+      header: headerValue(req, "x-cursor-runtime-profile"),
+      policy: this.deps.config.runtimePolicy,
+      authMode: auth.mode,
+      accountDefaultProfile: auth.defaultProfile,
+    });
+  }
+
+  private requestProfileFromAuth(auth: AuthContext): RuntimeProfile {
+    return resolveRequestProfile({
+      policy: this.deps.config.runtimePolicy,
+      authMode: auth.mode,
+      accountDefaultProfile: auth.defaultProfile,
+    });
+  }
+
+  private assertBoundProfile(req: IncomingMessage, session: Session): void {
+    const header = headerValue(req, "x-cursor-runtime-profile")?.trim();
+    if (!header || !this.deps.config.runtimePolicy.allowRequestOverride) return;
+    const requested = resolveRequestProfile({
+      header,
+      policy: this.deps.config.runtimePolicy,
+      authMode: "byok",
+    });
+    if (requested !== session.runtimeProfile) {
+      throw sessionConflict("runtime profile does not match the session owner");
+    }
+  }
+
+  private workspaceFor(profile: RuntimeProfile): string {
+    if (profile === "sand") return sandWorkspaceDir(this.deps.config.stateDir);
+    return this.deps.workspaceDir;
+  }
+
+  private async ensureSandRun(input: DriveSdkRunInput): Promise<void> {
+    if (input.session.runtimeProfile !== "sand") return;
+    if (this.deps.sandHealth && !this.deps.sandHealth.ready) {
+      throw forbiddenError("Sand runtime is not ready");
+    }
+    const apiKey = input.agent.type === "existing" ? undefined : input.agent.apiKey;
+    if (!apiKey || !this.deps.assertSandAccess) return;
+    await this.deps.assertSandAccess(apiKey);
   }
 
   private bindLedgerAfterSend(session: Session, logicalKey: string): void {

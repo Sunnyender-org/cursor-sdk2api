@@ -105,9 +105,13 @@ Responses clients that require `previous_response_id`, stored response objects, 
 Client tools are converted to SDK `local.customTools` through MCP. The model chooses tools through Cursor's harness, while the outer client executes them in its own workspace.
 
 - Supported: Claude Code, Grok, and Codex local tools, including client-owned web or network search.
-- Disabled: Cursor ambient shell, read, edit, task, `webSearch`, and `webFetch`.
+- Disabled: Cursor ambient shell, read, edit, and task. Hosted `webSearch` /
+  `webFetch` stay off unless `HOSTED_SEARCH_MODE=auto` and the client sends a
+  bare live web_search tool. Filters, required/named choice, Chat
+  `web_search_options`, and `x_search` stay fail closed.
 - Not available on this route: xAI `x_search`.
-- Not implemented: hosted OpenAI `web_search`, `file_search`, and `computer`.
+- Not implemented: OpenAI `file_search` and `computer`. Hosted `web_search`
+  is opt-in via `HOSTED_SEARCH_MODE=auto`.
 
 ## Operations
 

@@ -147,3 +147,29 @@ test("request profile falls back to policy default when header is omitted", () =
     }),
   ).toBe("sand");
 });
+
+test("managed account default_profile applies to new sessions unless a request override is allowed", () => {
+  expect(
+    resolveRequestProfile({
+      policy: sdkPolicy,
+      authMode: "managed",
+      accountDefaultProfile: "sand",
+    }),
+  ).toBe("sand");
+  expect(
+    resolveRequestProfile({
+      header: "sdk",
+      policy: sdkPolicy,
+      authMode: "managed",
+      accountDefaultProfile: "sand",
+    }),
+  ).toBe("sand");
+  expect(
+    resolveRequestProfile({
+      header: "sdk",
+      policy: { ...sdkPolicy, allowRequestOverride: true },
+      authMode: "managed",
+      accountDefaultProfile: "sand",
+    }),
+  ).toBe("sdk");
+});

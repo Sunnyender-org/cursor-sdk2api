@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Clock } from "../clock.js";
+import type { RuntimeProfile } from "./runtime-profile.js";
 
 export type LineageState = "completed" | "awaiting_tool_results" | "failed";
 
@@ -13,6 +14,7 @@ export interface LineageRecord {
   modelParams?: Array<{ id: string; value: string }>;
   sessionPolicyFingerprint: string;
   executableToolCatalogFingerprint: string;
+  runtimeProfile?: RuntimeProfile;
   state: LineageState;
   pendingToolIds: string[];
   pendingCalls?: Array<{ toolUseId: string; name: string }>;

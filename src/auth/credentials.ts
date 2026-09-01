@@ -2,12 +2,14 @@ import type { IncomingMessage } from "node:http";
 import { authenticationError } from "../errors.js";
 import { credentialFingerprint } from "../digest.js";
 import type { GatewayConfig } from "../config.js";
+import type { RuntimeProfile } from "../core/runtime-profile.js";
 import { headerValue } from "../server/http-util.js";
 
 export interface AuthContext {
   mode: "byok" | "managed";
   cursorApiKey: string;
   fingerprint: string;
+  defaultProfile?: RuntimeProfile;
 }
 
 export type ClientAuthorization =
@@ -40,11 +42,12 @@ export function authorizeClient(req: IncomingMessage, config: GatewayConfig): Cl
   };
 }
 
-export function managedAccountAuth(apiKey: string): AuthContext {
+export function managedAccountAuth(apiKey: string, defaultProfile?: RuntimeProfile): AuthContext {
   return {
     mode: "managed",
     cursorApiKey: apiKey,
     fingerprint: credentialFingerprint(apiKey),
+    ...(defaultProfile ? { defaultProfile } : {}),
   };
 }
 

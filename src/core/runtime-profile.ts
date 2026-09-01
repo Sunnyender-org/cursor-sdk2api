@@ -15,10 +15,13 @@ export const DEFAULT_RUNTIME_POLICY: RuntimePolicy = {
   hostedSearchMode: "off",
 };
 
-const RUNTIME_PROFILES = new Set<string>(["sdk", "sand"]);
 const HOSTED_SEARCH_MODES = new Set<string>(["off", "auto"]);
 const BOOL_TRUE = new Set(["1", "true", "yes", "on"]);
 const BOOL_FALSE = new Set(["0", "false", "no", "off"]);
+
+export function isRuntimeProfile(value: string): value is RuntimeProfile {
+  return value === "sdk" || value === "sand";
+}
 
 export function parseRuntimeProfile(
   raw: string | undefined | null,
@@ -27,7 +30,7 @@ export function parseRuntimeProfile(
   if (raw == null || raw.trim() === "") return DEFAULT_RUNTIME_PROFILE;
   const trimmed = raw.trim();
   const value = trimmed.toLowerCase();
-  if (RUNTIME_PROFILES.has(value)) return value as RuntimeProfile;
+  if (isRuntimeProfile(value)) return value;
   throw new Error(`${name}: invalid runtime profile "${trimmed}". Expected sdk or sand`);
 }
 
@@ -80,18 +83,21 @@ export function parseRuntimeLedgerV2(env: NodeJS.Dict<string> = process.env): bo
  *
  * BYOK: `x-cursor-runtime-profile` is ignored unless `allowRequestOverride`.
  *
- * TODO(managed): account `default_profile` applies to *new* sessions only.
- * Existing sessions keep the profile bound on the Agent/Run. Do not change
- * the account JSON store schema in this slice.
+ * Managed `accountDefaultProfile` applies to *new* sessions only.
+ * Existing sessions keep the profile bound on the Agent/Run.
  */
 export function resolveRequestProfile(input: {
   header?: string | null;
   policy: RuntimePolicy;
   authMode: "byok" | "managed";
+  accountDefaultProfile?: RuntimeProfile | null;
 }): RuntimeProfile {
   const header = input.header?.trim() ?? "";
   if (header && input.policy.allowRequestOverride) {
     return parseRuntimeProfile(header, "x-cursor-runtime-profile");
+  }
+  if (input.accountDefaultProfile) {
+    return boundRuntimeProfile(input.accountDefaultProfile);
   }
   return boundRuntimeProfile(input.policy.defaultProfile);
 }

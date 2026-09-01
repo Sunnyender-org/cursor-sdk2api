@@ -108,6 +108,8 @@ export class SdkRunDriver {
       modelParams: input.session.modelParams,
       clientToolNames: input.tools.map((tool) => tool.name),
       customTools,
+      runtimeProfile: input.session.runtimeProfile,
+      hostedSearch: input.session.hostedSearch,
     };
     if (input.agent.type === "existing") return Promise.resolve(input.agent.agent);
     if (input.agent.type === "resume") {

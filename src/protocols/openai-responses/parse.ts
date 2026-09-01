@@ -1,6 +1,12 @@
 import { compactTranscriptDigest } from "../../core/compact-anchor.js";
 import { invalidRequest } from "../../errors.js";
 import { stableStringify } from "../../digest.js";
+import {
+  assertHostedSearchRequest,
+  assertHostedSearchToolChoice,
+  isHostedWebSearchTool,
+} from "../../core/hosted-search.js";
+import type { HostedSearchMode } from "../../core/runtime-profile.js";
 import { collectImages, parseContinuation, parseModelParams } from "../anthropic/parse.js";
 import type {
   AnthropicContentBlock,
@@ -20,7 +26,10 @@ const UNSUPPORTED_MEDIA_TYPES = new Set([
   "file",
 ]);
 
-export function parseResponsesRequest(body: unknown): ParsedResponses {
+export function parseResponsesRequest(
+  body: unknown,
+  options: { hostedSearchMode?: HostedSearchMode } = {},
+): ParsedResponses {
   if (!body || typeof body !== "object") {
     throw invalidRequest("JSON object body is required");
   }
@@ -52,10 +61,9 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
   systemParts.push(...parsedInput.systemParts);
   if (formatDirective) systemParts.push(formatDirective);
   const messages = parsedInput.messages;
-  const tools = mergeResponseTools(
-    Array.isArray(raw.tools) ? raw.tools.map(parseResponsesTool) : [],
-    parsedInput.additionalTools,
-  );
+  const listed = splitResponsesTools(Array.isArray(raw.tools) ? raw.tools : [], options.hostedSearchMode ?? "off");
+  const tools = mergeResponseTools(listed.functions, parsedInput.additionalTools);
+  const hostedSearch = listed.hostedSearch;
   const names = new Set(tools.flatMap((tool) => [tool.name, tool.sdk_name ?? tool.name]));
 
   if (messages.length === 0 && !parsedInput.compactionTrigger) {
@@ -75,6 +83,7 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
     names,
     "Responses",
   );
+  assertHostedSearchToolChoice(hostedSearch, toolChoice);
   const systemText = systemParts.filter(Boolean).join("\n");
 
   return {
@@ -89,6 +98,7 @@ export function parseResponsesRequest(body: unknown): ParsedResponses {
       lastUser,
       continuation,
       toolChoice,
+      ...(hostedSearch ? { hostedSearch: true } : {}),
     },
     compaction: {
       trigger: parsedInput.compactionTrigger,
@@ -192,6 +202,29 @@ function parseInstructions(value: unknown): string {
       .join("\n");
   }
   throw invalidRequest("instructions must be a string or text part array");
+}
+
+function splitResponsesTools(
+  tools: unknown[],
+  mode: HostedSearchMode,
+): { functions: AnthropicTool[]; hostedSearch: boolean } {
+  let hostedSearch = false;
+  const functions: AnthropicTool[] = [];
+  for (const tool of tools) {
+    if (isHostedWebSearchTool(tool)) {
+      assertHostedSearchRequest(tool, mode);
+      hostedSearch = true;
+      continue;
+    }
+    if (tool && typeof tool === "object" && !Array.isArray(tool)) {
+      const type = (tool as { type?: unknown }).type;
+      if (type === "x_search" || type === "file_search" || type === "computer" || type === "shell" || type === "apply_patch") {
+        assertHostedSearchRequest(tool as Record<string, unknown>, mode);
+      }
+    }
+    functions.push(parseResponsesTool(tool));
+  }
+  return { functions, hostedSearch };
 }
 
 function parseResponsesTool(value: unknown): AnthropicTool {

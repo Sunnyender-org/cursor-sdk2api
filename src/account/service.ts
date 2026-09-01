@@ -11,6 +11,7 @@ export const UNAVAILABLE_GROK_BOT: CursorSandResult = {
 export interface ReadAccountOptions {
   fetchSandQuota?: (apiKey: string) => Promise<CursorSandResult>;
   defaultProfile?: RuntimeProfile;
+  sandLoaderReady?: boolean;
 }
 
 function compactRecord(record: Record<string, unknown>): Record<string, unknown> {
@@ -65,7 +66,7 @@ export async function readAccount(
   const grokBot = mapGrokBot(sand);
   const runtime = {
     default_profile: defaultProfile,
-    sand_selectable: sand.available,
+    sand_selectable: sand.available && options.sandLoaderReady !== false,
     applies_to_new_sessions: true,
   };
 

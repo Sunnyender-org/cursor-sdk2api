@@ -1,6 +1,7 @@
 import type { Clock } from "../clock.js";
 import { rateLimited, sessionConflict, sessionLost } from "../errors.js";
 import { Session, type SessionState } from "./session.js";
+import type { RuntimeProfile } from "./runtime-profile.js";
 
 const ACTIVE_RUN_STATES: ReadonlySet<SessionState> = new Set(["creating", "running", "resuming"]);
 
@@ -31,8 +32,12 @@ export class SessionRegistry {
     modelParams?: Array<{ id: string; value: string }>;
     sessionPolicyFingerprint: string;
     executableToolCatalogFingerprint: string;
+    runtimeProfile?: RuntimeProfile;
   }): Session {
-    this.assertCanActivateRun({ credentialFingerprint: input.credentialFingerprint });
+    this.assertCanActivateRun({
+      credentialFingerprint: input.credentialFingerprint,
+      runtimeProfile: input.runtimeProfile,
+    });
     const awaiting = [...this.sessions.values()].filter((session) => session.state === "awaiting_tool_results");
     if (awaiting.length >= this.limits.maxAwaitingSessions) {
       throw rateLimited("Awaiting session limit reached");
@@ -51,7 +56,11 @@ export class SessionRegistry {
    * Counts creating/running/resuming, excluding the session about to activate.
    * Awaiting tool_result continuation does not use this path.
    */
-  assertCanActivateRun(input: { credentialFingerprint: string; excludeSessionId?: string }): void {
+  assertCanActivateRun(input: {
+    credentialFingerprint: string;
+    runtimeProfile?: RuntimeProfile;
+    excludeSessionId?: string;
+  }): void {
     if (this.shuttingDown) {
       throw rateLimited("Gateway is draining; new runs are not accepted");
     }
@@ -62,7 +71,11 @@ export class SessionRegistry {
     if (active.length >= this.limits.globalActiveRuns) {
       throw rateLimited("Global active run limit reached");
     }
-    const perCred = active.filter((session) => session.credentialFingerprint === input.credentialFingerprint);
+    const perCred = active.filter(
+      (session) =>
+        session.credentialFingerprint === input.credentialFingerprint &&
+        session.runtimeProfile === (input.runtimeProfile ?? session.runtimeProfile),
+    );
     if (perCred.length >= this.limits.perCredentialActiveRuns) {
       throw rateLimited("Per-credential active run limit reached");
     }
@@ -71,6 +84,7 @@ export class SessionRegistry {
   activateRun(session: Session, next: "creating" | "running" | "resuming"): void {
     this.assertCanActivateRun({
       credentialFingerprint: session.credentialFingerprint,
+      runtimeProfile: session.runtimeProfile,
       excludeSessionId: session.sessionId,
     });
     session.state = next;

@@ -23,6 +23,7 @@ import type { PumpBoundary } from "../core/event-pump.js";
 import { LineageStore } from "../core/lineage-store.js";
 import { OrdinaryTurnJournal } from "../core/ordinary-turn-journal.js";
 import { RuntimeLedger } from "../core/runtime-ledger.js";
+import { inspectSandLoader, type SandLoaderHealth } from "../sdk/sand-loader.js";
 import { SessionRegistry } from "../core/session-registry.js";
 import {
   forbiddenError,
@@ -67,6 +68,7 @@ export interface App {
   accounts: CursorAccountFileStore;
   sdk: SdkRuntime;
   ledger?: RuntimeLedger;
+  sandHealth: SandLoaderHealth;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   listen(): Server;
   beginShutdown(): void;
@@ -140,9 +142,16 @@ export function createApp(input: {
   workspaceDir: string;
   beforeApplyBoundary?: (boundary: PumpBoundary) => Promise<void>;
   fetchSandQuota?: typeof fetchCursorSandQuota;
+  sandHealth?: SandLoaderHealth;
+  assertSandAccess?: (apiKey: string) => Promise<void>;
 }): App {
   const { config, sdk, clock, logger, workspaceDir, beforeApplyBoundary } = input;
   const fetchSandQuota = input.fetchSandQuota ?? fetchCursorSandQuota;
+  const sandHealth = input.sandHealth ?? inspectSandLoader();
+  const assertSandAccess = input.assertSandAccess ?? (async (apiKey: string) => {
+    const quota = await fetchSandQuota(apiKey);
+    if (!quota.available) throw forbiddenError("Sand is unavailable until Grok Bot access is granted");
+  });
   const registry = new SessionRegistry(clock, config.instanceId, {
     globalActiveRuns: config.globalActiveRuns,
     perCredentialActiveRuns: config.perCredentialActiveRuns,
@@ -169,6 +178,8 @@ export function createApp(input: {
     lineage,
     ordinaryJournal,
     ledger,
+    sandHealth,
+    assertSandAccess,
     beforeApplyBoundary,
   });
   const catalog = new ModelCatalog(sdk, clock, config.catalogCacheMs);
@@ -178,6 +189,7 @@ export function createApp(input: {
     readAccount(sdk, apiKey, {
       fetchSandQuota,
       defaultProfile: defaultProfile ?? config.runtimePolicy.defaultProfile ?? DEFAULT_RUNTIME_PROFILE,
+      sandLoaderReady: sandHealth.ready,
     });
   const publicAccount = (account: StoredCursorAccount) => ({
     id: account.id,
@@ -208,7 +220,7 @@ export function createApp(input: {
     const boundFingerprint = parsed ? boundCredentialFingerprint(parsed, sessionHint) : undefined;
     if (boundFingerprint && !excludedFingerprints.has(boundFingerprint)) {
       const bound = accounts.findByFingerprint(boundFingerprint);
-      if (bound) return managedAccountAuth(bound.apiKey);
+      if (bound) return managedAccountAuth(bound.apiKey, bound.defaultProfile);
       // A self-contained tool continuation can cold-branch from its full
       // transcript when the originally bound managed account was removed.
       // Completed session follow-ups still require their original account.
@@ -256,7 +268,7 @@ export function createApp(input: {
 
     const selected = accountPool.pick(candidates, parsed?.model ?? "account");
     if (!selected) throw upstreamError("No Cursor account is available", 503);
-    return managedAccountAuth(selected.apiKey);
+    return managedAccountAuth(selected.apiKey, selected.defaultProfile);
   };
 
   const resolveAuth = async (
@@ -328,12 +340,13 @@ export function createApp(input: {
     }
   };
 
-  const runtimeProfileFor = (req: IncomingMessage, client: ClientAuthorization) => {
+  const runtimeProfileFor = (req: IncomingMessage, client: ClientAuthorization, auth?: AuthContext) => {
     try {
       return resolveRequestProfile({
         header: headerValue(req, "x-cursor-runtime-profile"),
         policy: config.runtimePolicy,
         authMode: client.mode,
+        accountDefaultProfile: auth?.defaultProfile,
       });
     } catch (error) {
       throw invalidRequest(error instanceof Error ? error.message : "Invalid runtime profile");
@@ -382,6 +395,20 @@ export function createApp(input: {
             },
             runtime: "local",
             instance_id: config.instanceId,
+            profiles: {
+              default: config.runtimePolicy.defaultProfile,
+              sdk: {
+                ready: true,
+                sdk_version:
+                  sdk.sdkVersion && sdk.sdkVersion !== "unavailable" ? sdk.sdkVersion : config.sdkVersion,
+              },
+              sand: {
+                ready: sandHealth.ready,
+                sdk_version: sandHealth.sdk_version,
+                patch_contract_version: sandHealth.patch_contract_version,
+                ...(sandHealth.ready || !sandHealth.reason ? {} : { reason: sandHealth.reason }),
+              },
+            },
             readiness: {
               accepting_sessions: !shuttingDown && !registry.shuttingDown,
               shutting_down: shuttingDown,
@@ -413,7 +440,7 @@ export function createApp(input: {
         if (!id) throw invalidRequest("id is required");
         const stored = accounts.get(id);
         if (!stored) throw notFound("Persistent account was not found");
-        const auth = managedAccountAuth(stored.apiKey);
+        const auth = managedAccountAuth(stored.apiKey, stored.defaultProfile);
         const [models, account] = await Promise.all([
           catalog.list(stored.apiKey, auth.fingerprint),
           accountPayload(stored.apiKey, stored.defaultProfile),
@@ -450,7 +477,7 @@ export function createApp(input: {
         const stored = accounts.get(id);
         if (!stored) throw notFound("Persistent account was not found");
         if (!body || body.request === undefined) throw invalidRequest("request is required");
-        const auth = managedAccountAuth(stored.apiKey);
+        const auth = managedAccountAuth(stored.apiKey, stored.defaultProfile);
         if (protocol === "messages") {
           const parsed = parseMessagesRequest(body.request);
           await coordinator.handleMessages(req, res, auth, parsed, requestId);
@@ -470,7 +497,9 @@ export function createApp(input: {
           return;
         }
         if (protocol === "responses") {
-          const responses = parseResponsesRequest(body.request);
+        const responses = parseResponsesRequest(body.request, {
+          hostedSearchMode: config.runtimePolicy.hostedSearchMode,
+        });
           await coordinator.handleMessages(req, res, auth, responses.parsed, requestId, undefined, createResponsesWriterFactory());
           return;
         }
@@ -632,14 +661,16 @@ export function createApp(input: {
         const client = authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
-        const responses = parseResponsesRequest(body);
+        const responses = parseResponsesRequest(body, {
+          hostedSearchMode: config.runtimePolicy.hostedSearchMode,
+        });
         const sessionHint = headerValue(req, "x-cursor-session-id");
         if (responses.compaction.trigger) {
           const auth = await resolveAuth(client, responses.parsed, sessionHint);
           const minted = mintLocalCompact({
             store: compactStore,
             account: auth.fingerprint,
-            profile: runtimeProfileFor(req, client),
+            profile: runtimeProfileFor(req, client, auth),
             parsed: responses,
             sessionHint,
           });
@@ -662,7 +693,7 @@ export function createApp(input: {
               store: compactStore,
               token: responses.compaction.encryptedContent,
               account: auth.fingerprint,
-              profile: runtimeProfileFor(req, client),
+              profile: runtimeProfileFor(req, client, auth),
               parsed: responses,
             });
             hint = sessionHint ?? bound.sessionId;
@@ -684,13 +715,15 @@ export function createApp(input: {
         const client = authorizeClient(req, config);
         const body = await readJsonBody(req, config.maxBodyBytes);
         if (body === undefined) throw invalidRequest("JSON body is required");
-        const responses = parseResponsesRequest(body);
+        const responses = parseResponsesRequest(body, {
+          hostedSearchMode: config.runtimePolicy.hostedSearchMode,
+        });
         const sessionHint = headerValue(req, "x-cursor-session-id");
         const auth = await resolveAuth(client, responses.parsed, sessionHint);
         const minted = mintLocalCompact({
           store: compactStore,
           account: auth.fingerprint,
-          profile: runtimeProfileFor(req, client),
+          profile: runtimeProfileFor(req, client, auth),
           parsed: responses,
           sessionHint,
         });
@@ -743,6 +776,7 @@ export function createApp(input: {
     accounts,
     sdk,
     ledger,
+    sandHealth,
     handler,
     listen() {
       const server = createServer((req, res) => {

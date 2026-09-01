@@ -105,7 +105,7 @@ env_key = "GATEWAY_ACCESS_KEY"
 客户端工具会通过 MCP 转成 SDK `local.customTools`。模型在 Cursor harness 中选择工具，外层客户端在自己的工作区执行。
 
 - 支持：Claude Code、Grok、Codex 本机工具，包括客户端自带网页或网络搜索。
-- 禁用：Cursor ambient shell、read、edit、task、`webSearch`、`webFetch`。
+- 禁用：Cursor ambient shell、read、edit、task。托管 `webSearch` / `webFetch` 默认关闭；仅当 `HOSTED_SEARCH_MODE=auto` 且客户端发送无过滤的 live web_search 时启用。filters、required/named、Chat `web_search_options` 和 `x_search` 仍 fail closed。
 - 当前通路不可用：xAI `x_search`。
 - 尚未实现：OpenAI 托管 `web_search`、`file_search`、`computer`。
 

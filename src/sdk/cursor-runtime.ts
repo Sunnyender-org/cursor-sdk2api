@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Agent, Cursor, JsonlLocalAgentStore, type Run, type SDKAgent } from "@cursor/sdk";
 import {
-  AMBIENT_DISALLOWED_TOOLS,
+  ambientDisallowedTools,
   apiProfileToolAllowlist,
   type CreateAgentInput,
   type ResumeAgentInput,
@@ -19,8 +20,11 @@ import {
 } from "./port.js";
 import { redactSecrets, sdkFailure } from "../errors.js";
 import { ensurePrivateDir } from "../core/lineage-store.js";
+import { DEFAULT_RUNTIME_PROFILE, type RuntimeProfile } from "../core/runtime-profile.js";
 import { credentialFingerprint } from "../digest.js";
 import { fetchCursorDashboardQuota } from "../account/cursor-dashboard.js";
+import { ensureSandSdkClone } from "./sand-loader.js";
+import { sandStoreDir, sandWorkspaceDir } from "./sand-paths.js";
 
 const require = createRequire(import.meta.url);
 
@@ -197,71 +201,100 @@ function wrapSdkAgent(agent: SDKAgent, fallbackTools: Record<string, SdkCustomTo
   };
 }
 
-export function createCursorRuntime(options: { stateDir: string }): SdkRuntime {
-  const storeDir = join(options.stateDir, "sdk-store");
-  ensurePrivateDir(storeDir);
-  const tenantResources = (apiKey: string, workspaceRoot: string) => {
-    const partition = credentialFingerprint(apiKey);
-    const tenantStoreDir = join(storeDir, partition);
-    const tenantWorkspaceDir = join(workspaceRoot, partition);
-    ensurePrivateDir(tenantStoreDir);
-    ensurePrivateDir(tenantWorkspaceDir);
+export function agentResourceDirs(input: {
+  stateDir: string;
+  sdkWorkspaceRoot: string;
+  apiKey: string;
+  profile?: RuntimeProfile;
+}): { storeDir: string; workspaceDir: string } {
+  const partition = credentialFingerprint(input.apiKey);
+  const profile = input.profile ?? DEFAULT_RUNTIME_PROFILE;
+  if (profile === "sand") {
     return {
-      store: new JsonlLocalAgentStore(tenantStoreDir),
-      workspaceDir: tenantWorkspaceDir,
+      storeDir: join(sandStoreDir(input.stateDir), partition),
+      workspaceDir: join(sandWorkspaceDir(input.stateDir), partition),
     };
+  }
+  return {
+    storeDir: join(input.stateDir, "sdk-store", partition),
+    workspaceDir: join(input.sdkWorkspaceRoot, partition),
+  };
+}
+
+type CursorAgentApi = {
+  create: typeof Agent.create;
+  resume: typeof Agent.resume;
+};
+
+let sandAgentApi: Promise<CursorAgentApi> | undefined;
+
+async function sandAgentBindings(stateDir: string): Promise<CursorAgentApi> {
+  sandAgentApi ??= (async () => {
+    const cloneDir = await ensureSandSdkClone(stateDir);
+    const mod = (await import(pathToFileURL(join(cloneDir, "dist/esm/index.js")).href)) as {
+      Agent: typeof Agent;
+    };
+    return { create: mod.Agent.create.bind(mod.Agent), resume: mod.Agent.resume.bind(mod.Agent) };
+  })();
+  return sandAgentApi;
+}
+
+export function createCursorRuntime(options: { stateDir: string }): SdkRuntime {
+  const sdkStoreRoot = join(options.stateDir, "sdk-store");
+  ensurePrivateDir(sdkStoreRoot);
+  const tenantResources = (apiKey: string, workspaceRoot: string, profile?: RuntimeProfile) => {
+    const dirs = agentResourceDirs({
+      stateDir: options.stateDir,
+      sdkWorkspaceRoot: workspaceRoot,
+      apiKey,
+      profile,
+    });
+    ensurePrivateDir(dirs.storeDir);
+    ensurePrivateDir(dirs.workspaceDir);
+    return {
+      store: new JsonlLocalAgentStore(dirs.storeDir),
+      workspaceDir: dirs.workspaceDir,
+    };
+  };
+  const bindAgent = async (input: CreateAgentInput | ResumeAgentInput, kind: "create" | "resume"): Promise<SdkAgent> => {
+    const profile = input.runtimeProfile ?? DEFAULT_RUNTIME_PROFILE;
+    const hostedSearch = input.hostedSearch === true;
+    const customTools = input.customTools;
+    const resources = tenantResources(input.apiKey, input.workspaceDir, profile);
+    const api = profile === "sand" ? await sandAgentBindings(options.stateDir) : { create: Agent.create, resume: Agent.resume };
+    const local = {
+      cwd: resources.workspaceDir,
+      settingSources: [],
+      customTools: customTools as never,
+      store: resources.store,
+    };
+    const shared = {
+      apiKey: input.apiKey,
+      model: {
+        id: input.modelId,
+        params: input.modelParams,
+      },
+      tools: apiProfileToolAllowlist(input.clientToolNames, hostedSearch) as never,
+      disallowedTools: ambientDisallowedTools(hostedSearch) as never,
+      local,
+    };
+    let agent;
+    try {
+      agent = kind === "resume" && "agentId" in input
+        ? await api.resume(input.agentId, shared)
+        : await api.create(shared);
+    } catch (error) {
+      throw mapSdkFailure(error);
+    }
+    return wrapSdkAgent(agent, customTools);
   };
   return {
     sdkVersion: readSdkVersion(),
-    async createAgent(input: CreateAgentInput): Promise<SdkAgent> {
-      const customTools = input.customTools;
-      const resources = tenantResources(input.apiKey, input.workspaceDir);
-      let agent;
-      try {
-        agent = await Agent.create({
-          apiKey: input.apiKey,
-          model: {
-            id: input.modelId,
-            params: input.modelParams,
-          },
-          tools: apiProfileToolAllowlist(input.clientToolNames) as never,
-          disallowedTools: [...AMBIENT_DISALLOWED_TOOLS] as never,
-          local: {
-            cwd: resources.workspaceDir,
-            settingSources: [],
-            customTools: customTools as never,
-            store: resources.store,
-          },
-        });
-      } catch (error) {
-        throw mapSdkFailure(error);
-      }
-      return wrapSdkAgent(agent, customTools);
+    createAgent(input: CreateAgentInput): Promise<SdkAgent> {
+      return bindAgent(input, "create");
     },
-    async resumeAgent(input: ResumeAgentInput): Promise<SdkAgent> {
-      const customTools = input.customTools;
-      const resources = tenantResources(input.apiKey, input.workspaceDir);
-      let agent;
-      try {
-        agent = await Agent.resume(input.agentId, {
-          apiKey: input.apiKey,
-          model: {
-            id: input.modelId,
-            params: input.modelParams,
-          },
-          tools: apiProfileToolAllowlist(input.clientToolNames) as never,
-          disallowedTools: [...AMBIENT_DISALLOWED_TOOLS] as never,
-          local: {
-            cwd: resources.workspaceDir,
-            settingSources: [],
-            customTools: customTools as never,
-            store: resources.store,
-          },
-        });
-      } catch (error) {
-        throw mapSdkFailure(error);
-      }
-      return wrapSdkAgent(agent, customTools);
+    resumeAgent(input: ResumeAgentInput): Promise<SdkAgent> {
+      return bindAgent(input, "resume");
     },
     async listModels(apiKey: string): Promise<SdkCatalogResult> {
       try {
