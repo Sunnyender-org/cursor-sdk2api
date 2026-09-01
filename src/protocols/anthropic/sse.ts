@@ -98,6 +98,15 @@ export function writeSseError(res: ServerResponse, body: unknown): void {
   writeSse(res, "error", body);
 }
 
+export function writeTerminalStop(res: ServerResponse): void {
+  writeSse(res, "message_delta", {
+    type: "message_delta",
+    delta: { stop_reason: null, stop_sequence: null },
+    usage: { output_tokens: 0 },
+  });
+  writeSse(res, "message_stop", { type: "message_stop" });
+}
+
 export function writeCompletedTurn(res: ServerResponse, turn: AssistantTurn, requestId: string): void {
   beginSse(res, requestId, turn.sessionId);
   writeMessageStart(res, turn);

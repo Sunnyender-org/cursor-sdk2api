@@ -284,3 +284,32 @@ test("empty semantic output fails closed", async () => {
   expect(body.error.type).toBe("cursor_empty_turn");
   expect(body.request_id).toBeTruthy();
 });
+
+test("in-stream error closes open blocks and sends message_stop before error", async () => {
+  ctx = await startTestApp({
+    sdk: { scripts: [[{ type: "text", chunks: ["partial"] }, { type: "error", message: "upstream failed" }]] },
+  });
+  const res = await api(ctx, "/v1/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      max_tokens: 16,
+      stream: true,
+      messages: [{ role: "user", content: "go" }],
+    }),
+  });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("text/event-stream");
+  const events = parseSse(await res.text());
+  const eventTypes = events.map((e) => e.event);
+  expect(eventTypes[0]).toBe("message_start");
+  expect(eventTypes).toContain("content_block_delta");
+  expect(eventTypes).toContain("content_block_stop");
+  expect(eventTypes).toContain("message_delta");
+  expect(eventTypes).toContain("message_stop");
+  expect(eventTypes).toContain("error");
+  const stopIdx = eventTypes.indexOf("message_stop");
+  const errorIdx = eventTypes.indexOf("error");
+  expect(stopIdx).toBeGreaterThan(-1);
+  expect(errorIdx).toBeGreaterThan(stopIdx);
+});
