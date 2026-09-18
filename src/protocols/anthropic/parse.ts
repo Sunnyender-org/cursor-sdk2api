@@ -1,3 +1,4 @@
+import { sha256Hex } from "../../digest.js";
 import { invalidRequest } from "../../errors.js";
 import type {
   AnthropicContentBlock,
@@ -6,6 +7,7 @@ import type {
   AnthropicTool,
   ParsedMessages,
   ParsedToolResult,
+  ToolResultSdkPart,
 } from "./types.js";
 import { parseAnthropicToolChoice, toolChoiceDirective } from "../tool-choice.js";
 
@@ -256,11 +258,15 @@ export function parseContinuation(lastUser: AnthropicMessage): ParsedToolResult[
   }
   return blocks
     .filter((block): block is Extract<AnthropicContentBlock, { type: "tool_result" }> => block.type === "tool_result")
-    .map((block) => ({
-      toolUseId: block.tool_use_id,
-      content: stringifyToolResult(block.content),
-      isError: block.is_error === true,
-    }));
+    .map((block) => {
+      const sdkContent = toolResultSdkContent(block.content);
+      return {
+        toolUseId: block.tool_use_id,
+        content: digestToolResultContent(block.content),
+        isError: block.is_error === true,
+        ...(sdkContent ? { sdkContent } : {}),
+      };
+    });
 }
 
 export function asBlocks(content: string | AnthropicContentBlock[]): AnthropicContentBlock[] {
@@ -274,9 +280,10 @@ export function stringifyToolResult(content: unknown): string {
   if (Array.isArray(content)) {
     return content
       .map((block) => {
-        if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-          return String((block as { text?: string }).text ?? "");
-        }
+        if (!block || typeof block !== "object") return JSON.stringify(block);
+        const item = block as AnthropicContentBlock;
+        if (item.type === "text") return item.text;
+        if (item.type === "image") return "[image]";
         return JSON.stringify(block);
       })
       .join("\n");
@@ -286,6 +293,46 @@ export function stringifyToolResult(content: unknown): string {
   } catch {
     return String(content);
   }
+}
+
+export function digestToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== "object") return JSON.stringify(block);
+        const item = block as AnthropicContentBlock;
+        if (item.type === "text") return item.text;
+        if (item.type === "image") {
+          return item.source.type === "base64"
+            ? `IMAGE:${item.source.media_type}:${sha256Hex(item.source.data)}`
+            : `IMAGE:url:${sha256Hex(item.source.url)}`;
+        }
+        return JSON.stringify(block);
+      })
+      .join("\n");
+  }
+  return stringifyToolResult(content);
+}
+
+export function toolResultSdkContent(content: unknown): ToolResultSdkPart[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const parts: ToolResultSdkPart[] = [];
+  let hasImage = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const item = block as AnthropicContentBlock;
+    if (item.type === "text") {
+      parts.push({ type: "text", text: item.text });
+      continue;
+    }
+    if (item.type === "image" && item.source.type === "base64") {
+      hasImage = true;
+      parts.push({ type: "image", data: item.source.data, mimeType: item.source.media_type });
+    }
+  }
+  return hasImage ? parts : undefined;
 }
 
 export function renderPrompt(

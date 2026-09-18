@@ -13,6 +13,7 @@
 
 ## Unreleased
 
+- `/v1/responses` now accepts Grok-style `function_call_output` image parts (`input_image` / `image_url` base64 data URLs) and forwards them as Cursor SDK tool content. File and unknown tool-output parts still fail closed. This unblocks Grok Build after `read_file` on a screenshot, which previously 422'd with `unsupported type: input_image` and cancelled the turn.
 - Ordinary turns now follow BeefAPI's Cursor Agent contract: a typed turn IR, exact-lineage Agent reuse, and `send(current turn)` instead of flattening the whole transcript on every request. Tool continuation, `x-cursor-session-id` follow-up, and cold rebuild remain. Disable with `ORDINARY_TURN_COORDINATOR=0`.
 
 - `/v1/messages` accepts sub2api compatibility roles without flattening the transcript: `system`/`developer` remain in order, historical `tool`/`function` output stays visible to the Harness, and a trailing tool result requires a real call id before entering continuation lookup.

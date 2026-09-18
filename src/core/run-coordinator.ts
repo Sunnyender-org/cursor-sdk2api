@@ -17,7 +17,7 @@ import type { Logger } from "../log.js";
 import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/types.js";
 import { renderPrompt } from "../protocols/anthropic/parse.js";
 import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
-import type { SdkRuntime } from "../sdk/port.js";
+import type { SdkCustomToolResult, SdkRuntime } from "../sdk/port.js";
 import {
   currentTurnSendPayload,
   cursorAgentTurnFromParsed,
@@ -802,11 +802,7 @@ export class RunCoordinator {
         content: result.content,
         is_error: result.isError,
       });
-      pending.resolve(
-        result.isError
-          ? { content: [{ type: "text", text: result.content }], isError: true }
-          : result.content,
-      );
+      pending.resolve(sdkCustomToolResult(result));
     }
     this.persistLedgerToolResults(session, results);
     await drive;
@@ -1565,6 +1561,15 @@ export class RunCoordinator {
       }
     }
   }
+}
+
+function sdkCustomToolResult(result: ParsedToolResult): SdkCustomToolResult {
+  if (result.sdkContent) {
+    return { content: result.sdkContent, isError: result.isError };
+  }
+  return result.isError
+    ? { content: [{ type: "text", text: result.content }], isError: true }
+    : result.content;
 }
 
 function recoveredToolResultPrompt(record: LineageRecord, results: ParsedToolResult[]): string {

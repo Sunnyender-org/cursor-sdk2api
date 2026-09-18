@@ -68,10 +68,16 @@ export interface AssistantTurn {
   usage: UsageView;
 }
 
+export type ToolResultSdkPart =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType?: string };
+
 export interface ParsedToolResult {
   toolUseId: string;
   content: string;
   isError: boolean;
+  /** Present when the tool result includes images the SDK can consume. */
+  sdkContent?: ToolResultSdkPart[];
 }
 
 export interface ParsedMessages {
