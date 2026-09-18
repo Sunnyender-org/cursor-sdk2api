@@ -9,6 +9,7 @@ import {
   type RuntimePolicy,
 } from "./core/runtime-profile.js";
 import { instanceId } from "./ids.js";
+import { parseModelContextTokens, DEFAULT_COMPACT_FILL_RATIO } from "./core/model-context.js";
 import { resolveOutboundProxy } from "./sdk/proxy.js";
 
 export type AuthMode = "byok" | "managed";
@@ -46,6 +47,8 @@ export interface GatewayConfig {
   capabilities: RuntimeCapabilities;
   runtimePolicy: RuntimePolicy;
   runtimeLedgerV2: boolean;
+  modelContextTokens: Record<string, number>;
+  compactFillRatio: number;
 }
 
 export interface RuntimeCapabilities {
@@ -109,6 +112,16 @@ function envInt(name: string, fallback: number): number {
   return value;
 }
 
+function envRatio(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0 || value >= 1) {
+    throw new Error(`Environment variable ${name} must be a ratio between 0 and 1`);
+  }
+  return value;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -155,6 +168,8 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     capabilities: { ...DEFAULT_CAPABILITIES },
     runtimePolicy: loadRuntimePolicyFromEnv(),
     runtimeLedgerV2: parseRuntimeLedgerV2(),
+    modelContextTokens: parseModelContextTokens(process.env.MODEL_CONTEXT_TOKENS),
+    compactFillRatio: envRatio("COMPACT_FILL_RATIO", DEFAULT_COMPACT_FILL_RATIO),
   };
 
   if (authMode === "managed") {

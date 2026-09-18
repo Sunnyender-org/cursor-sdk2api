@@ -10,7 +10,7 @@ import {
 import { join } from "node:path";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Clock } from "../clock.js";
-import { digestJson, stableStringify } from "../digest.js";
+import { digestJson, sha256Hex, stableStringify } from "../digest.js";
 import { GatewayError, invalidRequest, sessionConflict } from "../errors.js";
 import { ensurePrivateDir } from "./lineage-store.js";
 import type { RuntimeProfile } from "./runtime-profile.js";
@@ -69,10 +69,41 @@ export function compactTranscriptDigest(input: {
 }): string {
   return digestJson({
     model: input.model,
-    systemText: input.systemText,
-    messages: input.messages,
-    tools: input.tools,
+    systemText: sha256Hex(input.systemText),
+    messages: input.messages.map((message) => ({
+      role: message.role,
+      content: fingerprintValue(message.content),
+    })),
+    tools: input.tools.map((tool) => ({
+      name: tool.name,
+      sdk_name: tool.sdk_name ?? tool.name,
+      schema: digestJson(tool.input_schema ?? null),
+    })),
   });
+}
+
+/** Hash large blobs instead of putting them through one recursive JSON stringify. */
+function fingerprintValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.length <= 2048 ? value : { chars: value.length, sha256: sha256Hex(value) };
+  }
+  if (Array.isArray(value)) return value.map(fingerprintValue);
+  if (!value || typeof value !== "object") return value;
+  const raw = value as Record<string, unknown>;
+  if (raw.type === "image") {
+    const source = raw.source && typeof raw.source === "object" ? (raw.source as Record<string, unknown>) : raw;
+    if (typeof source.data === "string") {
+      return { type: "image", mediaType: source.media_type ?? raw.media_type, sha256: sha256Hex(source.data) };
+    }
+    if (typeof source.url === "string") {
+      return { type: "image", sha256: sha256Hex(source.url) };
+    }
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(raw).sort()) {
+    out[key] = fingerprintValue(raw[key]);
+  }
+  return out;
 }
 
 export class CompactAnchorStore {

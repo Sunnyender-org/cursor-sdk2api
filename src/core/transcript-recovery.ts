@@ -1,6 +1,6 @@
 import { digestJson } from "../digest.js";
 import { sessionLost } from "../errors.js";
-import { asBlocks, renderPrompt, stringifyToolResult } from "../protocols/anthropic/parse.js";
+import { asBlocks, renderPrompt, stringifyToolResult, toolResultSdkContent } from "../protocols/anthropic/parse.js";
 import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/types.js";
 import type { SdkCustomToolResult } from "../sdk/port.js";
 import { completedToolSignature } from "./tool-bridge.js";
@@ -75,10 +75,13 @@ export function buildTranscriptRecovery(
       if (!call || !catalog.has(call.name)) continue;
       const signature = completedToolSignature(call.name, call.input);
       const queue = completedResults.get(signature) ?? [];
+      const sdkContent = toolResultSdkContent(block.content);
       queue.push(
-        block.is_error === true
-          ? { content: [{ type: "text", text: stringifyToolResult(block.content) }], isError: true }
-          : stringifyToolResult(block.content),
+        sdkContent
+          ? { content: sdkContent, isError: block.is_error === true }
+          : block.is_error === true
+            ? { content: [{ type: "text", text: stringifyToolResult(block.content) }], isError: true }
+            : stringifyToolResult(block.content),
       );
       completedResults.set(signature, queue);
       completedIds.add(block.tool_use_id);

@@ -1,3 +1,4 @@
+import { sha256Hex } from "../../digest.js";
 import { invalidRequest } from "../../errors.js";
 import type {
   AnthropicContentBlock,
@@ -6,6 +7,7 @@ import type {
   AnthropicTool,
   ParsedMessages,
   ParsedToolResult,
+  ToolResultSdkPart,
 } from "./types.js";
 import { parseAnthropicToolChoice, toolChoiceDirective } from "../tool-choice.js";
 
@@ -256,11 +258,15 @@ export function parseContinuation(lastUser: AnthropicMessage): ParsedToolResult[
   }
   return blocks
     .filter((block): block is Extract<AnthropicContentBlock, { type: "tool_result" }> => block.type === "tool_result")
-    .map((block) => ({
-      toolUseId: block.tool_use_id,
-      content: stringifyToolResult(block.content),
-      isError: block.is_error === true,
-    }));
+    .map((block) => {
+      const sdkContent = toolResultSdkContent(block.content);
+      return {
+        toolUseId: block.tool_use_id,
+        content: digestToolResultContent(block.content),
+        isError: block.is_error === true,
+        ...(sdkContent ? { sdkContent } : {}),
+      };
+    });
 }
 
 export function asBlocks(content: string | AnthropicContentBlock[]): AnthropicContentBlock[] {
@@ -274,9 +280,10 @@ export function stringifyToolResult(content: unknown): string {
   if (Array.isArray(content)) {
     return content
       .map((block) => {
-        if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-          return String((block as { text?: string }).text ?? "");
-        }
+        if (!block || typeof block !== "object") return JSON.stringify(block);
+        const item = block as AnthropicContentBlock;
+        if (item.type === "text") return item.text;
+        if (item.type === "image") return "[image]";
         return JSON.stringify(block);
       })
       .join("\n");
@@ -288,9 +295,51 @@ export function stringifyToolResult(content: unknown): string {
   }
 }
 
+export function digestToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== "object") return JSON.stringify(block);
+        const item = block as AnthropicContentBlock;
+        if (item.type === "text") return item.text;
+        if (item.type === "image") {
+          return item.source.type === "base64"
+            ? `IMAGE:${item.source.media_type}:${sha256Hex(item.source.data)}`
+            : `IMAGE:url:${sha256Hex(item.source.url)}`;
+        }
+        return JSON.stringify(block);
+      })
+      .join("\n");
+  }
+  return stringifyToolResult(content);
+}
+
+export function toolResultSdkContent(content: unknown): ToolResultSdkPart[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const parts: ToolResultSdkPart[] = [];
+  let hasImage = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const item = block as AnthropicContentBlock;
+    if (item.type === "text") {
+      parts.push({ type: "text", text: item.text });
+      continue;
+    }
+    if (item.type === "image" && item.source.type === "base64") {
+      hasImage = true;
+      parts.push({ type: "image", data: item.source.data, mimeType: item.source.media_type });
+    }
+  }
+  return hasImage ? parts : undefined;
+}
+
+export { SDK_PROMPT_MAX_CHARS, sdkPromptMaxCharsForModel } from "../../core/model-context.js";
+
 export function renderPrompt(
   parsed: ParsedMessages,
-  options: { includeContinuation?: boolean } = {},
+  options: { includeContinuation?: boolean; maxChars?: number } = {},
 ): { text: string; images: Array<{ data: string; mimeType: string }> } {
   const parts: string[] = [];
   if (parsed.tools.length > 0) {
@@ -327,7 +376,18 @@ export function renderPrompt(
   }
   const directive = toolChoiceDirective(parsed.toolChoice, parsed.tools.length > 0);
   if (directive) parts.push(directive);
-  return { text: parts.join("\n\n") || " ", images: parsed.images };
+  const text = parts.join("\n\n") || " ";
+  const maxChars = options.maxChars;
+  if (!maxChars || text.length <= maxChars) {
+    return { text, images: parsed.images };
+  }
+  const keep = text.slice(-maxChars);
+  const boundary = keep.indexOf("\n\n");
+  const body = boundary > 0 && boundary < 800 ? keep.slice(boundary + 2) : keep;
+  return {
+    text: `[local compact omitted ${text.length - body.length} chars to stay under the SDK send budget]\n\n${body}`,
+    images: parsed.images.slice(-1),
+  };
 }
 
 export function collectImages(messages: AnthropicMessage[]): Array<{ data: string; mimeType: string }> {

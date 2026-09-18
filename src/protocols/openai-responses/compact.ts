@@ -52,6 +52,7 @@ export function writeLocalCompactResponse(input: {
   token: string;
   compactId: string;
   sessionId?: string;
+  inputTokens?: number;
 }): void {
   const createdAt = Math.floor(input.clock.now() / 1000);
   const response = encodeCompactionResponse({
@@ -60,6 +61,7 @@ export function writeLocalCompactResponse(input: {
     model: input.model,
     createdAt,
     sessionId: input.sessionId,
+    inputTokens: input.inputTokens,
   });
   if (!input.stream) {
     sendJson(
@@ -94,6 +96,7 @@ export function encodeCompactionResponse(input: {
   model: string;
   createdAt: number;
   sessionId?: string;
+  inputTokens?: number;
 }): Record<string, unknown> {
   const id = input.compactId.startsWith("cmp_") ? `resp_${input.compactId.slice(4)}` : responseId(messageId());
   const item = {
@@ -101,6 +104,7 @@ export function encodeCompactionResponse(input: {
     type: "compaction",
     encrypted_content: input.token,
   };
+  const inputTokens = Math.max(0, Math.floor(input.inputTokens ?? 0));
   return {
     id,
     object: "response",
@@ -111,9 +115,9 @@ export function encodeCompactionResponse(input: {
     model: input.model,
     output: [item],
     usage: {
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+      input_tokens: inputTokens,
+      output_tokens: 1,
+      total_tokens: inputTokens + 1,
       input_tokens_details: { cached_tokens: 0 },
       output_tokens_details: { reasoning_tokens: 0 },
       usage_status: "unavailable",

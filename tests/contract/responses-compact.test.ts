@@ -56,10 +56,17 @@ test("POST /v1/responses/compact returns exactly one csgw1 item without SDK send
       input: "long conversation that must not be stored as transcript",
     }),
   });
-  const body = (await res.json()) as { object: string; status: string; output: unknown[] };
+  const body = (await res.json()) as {
+    object: string;
+    status: string;
+    output: unknown[];
+    usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+  };
   expect(res.status).toBe(200);
   expect(body.object).toBe("response");
   expect(body.status).toBe("completed");
+  expect(body.usage?.input_tokens).toBeGreaterThan(0);
+  expect(body.usage?.output_tokens).toBe(1);
   const item = compactionItem(body);
   expect(item.encrypted_content.startsWith(COMPACT_TOKEN_PREFIX)).toBe(true);
   expect(item.encrypted_content.startsWith("v3.")).toBe(false);

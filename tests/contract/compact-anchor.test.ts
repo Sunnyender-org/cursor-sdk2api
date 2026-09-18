@@ -7,7 +7,11 @@ import {
   COMPACT_HMAC_KEY_BYTES,
   COMPACT_TOKEN_PREFIX,
   CompactAnchorStore,
+  compactTranscriptDigest,
 } from "../../src/core/compact-anchor.js";
+import { renderPrompt } from "../../src/protocols/anthropic/parse.js";
+import { sdkPromptMaxCharsForModel } from "../../src/core/model-context.js";
+import type { ParsedMessages } from "../../src/protocols/anthropic/types.js";
 import { GatewayError } from "../../src/errors.js";
 
 function storeAt(clock = new FakeClock(1_000_000)): { store: CompactAnchorStore; dir: string; clock: FakeClock } {
@@ -74,4 +78,58 @@ test("missing local compact state fails closed without the transcript", () => {
   }
   const leftover = readdirSync(dir);
   expect(leftover.some((name) => name.includes("digest-secret-history"))).toBe(false);
+});
+
+test("compact transcript digest hashes blobs instead of stuffing raw image bytes", () => {
+  const pngA = "A".repeat(80_000);
+  const pngB = "B".repeat(80_000);
+  const digestOf = (data: string) =>
+    compactTranscriptDigest({
+      model: "composer-2.5",
+      systemText: "sys",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "see this" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data } },
+          ],
+        },
+      ],
+      tools: [],
+    });
+  const first = digestOf(pngA);
+  expect(first).toMatch(/^[a-f0-9]{64}$/);
+  expect(digestOf(pngA)).toBe(first);
+  expect(digestOf(pngB)).not.toBe(first);
+});
+
+function parsedWithHistory(turns: number, chunk: string): ParsedMessages {
+  return {
+    model: "composer-2.5",
+    modelParams: [],
+    stream: false,
+    systemText: "keep",
+    messages: Array.from({ length: turns }, (_, index) => ({
+      role: "user" as const,
+      content: `turn-${index} ${chunk}`,
+    })),
+    tools: [],
+    images: [],
+    lastUser: undefined,
+    continuation: undefined,
+    toolChoice: { mode: "auto", disableParallel: false },
+  };
+}
+
+test("rebuild prompt keeps the tail under the SDK send budget", () => {
+  const parsed = parsedWithHistory(40, "x".repeat(8_000));
+  const budget = sdkPromptMaxCharsForModel("composer-2.5");
+  const full = renderPrompt(parsed);
+  expect(full.text.length).toBeGreaterThan(budget);
+  const bounded = renderPrompt(parsed, { maxChars: budget });
+  expect(bounded.text.length).toBeLessThanOrEqual(budget + 120);
+  expect(bounded.text).toContain("local compact omitted");
+  expect(bounded.text).toContain("turn-39");
+  expect(bounded.text).not.toContain("turn-0 ");
 });

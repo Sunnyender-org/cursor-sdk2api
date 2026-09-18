@@ -16,8 +16,9 @@ import {
 import type { Logger } from "../log.js";
 import type { ParsedMessages, ParsedToolResult } from "../protocols/anthropic/types.js";
 import { renderPrompt } from "../protocols/anthropic/parse.js";
+import { contextTokensForModel, sdkPromptMaxCharsForModel } from "./model-context.js";
 import { createAnthropicWriter } from "../protocols/anthropic/writer.js";
-import type { SdkRuntime } from "../sdk/port.js";
+import type { SdkCustomToolResult, SdkRuntime } from "../sdk/port.js";
 import {
   currentTurnSendPayload,
   cursorAgentTurnFromParsed,
@@ -417,13 +418,17 @@ export class RunCoordinator {
     }
 
     const rebuildReason = claim.mode === "rebuild" ? claim.reason : "resume_fallback";
+    const compactMaxChars = this.promptMaxChars(parsed.model);
+    const rebuildPrompt = renderPrompt(parsed, { maxChars: compactMaxChars });
     this.traceOrdinary({
       action: "rebuild",
       reason: rebuildReason,
       model: parsed.model,
-      send_chars: renderPrompt(parsed).text.length,
+      send_chars: rebuildPrompt.text.length,
+      context_tokens: contextTokensForModel(parsed.model, this.deps.config.modelContextTokens),
+      compact_max_chars: compactMaxChars,
     });
-    await this.startTurn(req, res, auth, parsed, requestId, writerFactory, turn);
+    await this.startTurn(req, res, auth, parsed, requestId, writerFactory, turn, rebuildPrompt);
   }
 
   private async resumeOrdinaryAgent(
@@ -482,11 +487,21 @@ export class RunCoordinator {
     );
   }
 
+  private promptMaxChars(model: string): number {
+    return sdkPromptMaxCharsForModel(
+      model,
+      this.deps.config.modelContextTokens ?? {},
+      this.deps.config.compactFillRatio,
+    );
+  }
+
   private traceOrdinary(event: {
     action: "resume" | "rebuild";
     reason: string;
     model: string;
     send_chars: number;
+    context_tokens?: number;
+    compact_max_chars?: number;
   }): void {
     this.deps.logger.info(
       {
@@ -494,6 +509,8 @@ export class RunCoordinator {
         action: event.action,
         reason: event.reason,
         send_chars: event.send_chars,
+        ...(event.context_tokens != null ? { context_tokens: event.context_tokens } : {}),
+        ...(event.compact_max_chars != null ? { compact_max_chars: event.compact_max_chars } : {}),
       },
       "ordinary turn",
     );
@@ -590,7 +607,7 @@ export class RunCoordinator {
     session.hostedSearch = parsed.hostedSearch === true;
     if (ordinaryTurn) session.ordinaryReplayOwner = ordinaryTurn;
     try {
-      const prompt = sendOverride ?? renderPrompt(parsed);
+      const prompt = sendOverride ?? renderPrompt(parsed, { maxChars: this.promptMaxChars(parsed.model) });
       const pump = await this.startAndBind(
         {
           session,
@@ -647,7 +664,7 @@ export class RunCoordinator {
     session.lastResultDigest = undefined;
     session.replay = undefined;
     session.appliedBoundaryId = undefined;
-    const prompt = options.send ?? renderPrompt(parsed);
+    const prompt = options.send ?? renderPrompt(parsed, { maxChars: this.promptMaxChars(parsed.model) });
     try {
       const pump = await this.startAndBind(
         {
@@ -802,11 +819,7 @@ export class RunCoordinator {
         content: result.content,
         is_error: result.isError,
       });
-      pending.resolve(
-        result.isError
-          ? { content: [{ type: "text", text: result.content }], isError: true }
-          : result.content,
-      );
+      pending.resolve(sdkCustomToolResult(result));
     }
     this.persistLedgerToolResults(session, results);
     await drive;
@@ -1565,6 +1578,15 @@ export class RunCoordinator {
       }
     }
   }
+}
+
+function sdkCustomToolResult(result: ParsedToolResult): SdkCustomToolResult {
+  if (result.sdkContent) {
+    return { content: result.sdkContent, isError: result.isError };
+  }
+  return result.isError
+    ? { content: [{ type: "text", text: result.content }], isError: true }
+    : result.content;
 }
 
 function recoveredToolResultPrompt(record: LineageRecord, results: ParsedToolResult[]): string {

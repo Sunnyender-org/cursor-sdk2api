@@ -411,7 +411,53 @@ test("function_call_output text content arrays are passed as tool text", async (
   expect(ctx.sdk.agents[0]?.runs[0]?.capturedToolResults).toEqual(["72F\nsunny"]);
 });
 
-test("unsupported function_call_output image and file parts fail closed without consuming the tool", async () => {
+test("function_call_output base64 images are forwarded as SDK tool content", async () => {
+  ctx = await startTestApp({
+    sdk: {
+      scripts: [
+        [
+          { type: "tools", calls: [{ name: "lookup", input: { q: "weather" } }] },
+          { type: "text", chunks: ["done"] },
+        ],
+      ],
+    },
+  });
+  const first = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({ model: "composer-2.5", input: "weather?", tools: [responsesWeatherTool()] }),
+  });
+  const call = outputOfType((await first.json()) as { output: unknown[] }, "function_call")[0];
+  const data = "YQ==";
+  const second = await api(ctx, "/v1/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "composer-2.5",
+      input: [
+        {
+          type: "function_call_output",
+          call_id: call?.call_id,
+          output: [
+            { type: "input_text", text: "Read image file: shot.png" },
+            { type: "input_image", image_url: `data:image/png;base64,${data}` },
+          ],
+        },
+      ],
+      tools: [responsesWeatherTool()],
+    }),
+  });
+  expect(second.status).toBe(200);
+  expect(ctx.sdk.agents[0]?.runs[0]?.capturedToolResults).toEqual([
+    {
+      content: [
+        { type: "text", text: "Read image file: shot.png" },
+        { type: "image", data, mimeType: "image/png" },
+      ],
+      isError: false,
+    },
+  ]);
+});
+
+test("unsupported function_call_output file and unknown parts fail closed without consuming the tool", async () => {
   ctx = await startTestApp({
     sdk: {
       scripts: [
@@ -428,7 +474,6 @@ test("unsupported function_call_output image and file parts fail closed without 
   });
   const call = outputOfType((await first.json()) as { output: unknown[] }, "function_call")[0];
   const unsupported = [
-    { type: "input_image", image_url: "data:image/png;base64,YQ==" },
     { type: "input_file", file_id: "file_test" },
     { type: "unknown", value: "nope" },
   ];

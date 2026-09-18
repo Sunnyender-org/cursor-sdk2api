@@ -508,31 +508,40 @@ function parseFunctionCallOutput(
   return {
     type: "tool_result",
     tool_use_id: raw.call_id,
-    content: stringifyResponsesToolOutput(raw.output),
+    content: parseResponsesToolOutput(raw.output),
     is_error: raw.is_error === true || raw.status === "incomplete",
   };
 }
 
-function stringifyResponsesToolOutput(output: unknown): string {
+function parseResponsesToolOutput(output: unknown): string | AnthropicContentBlock[] {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) {
-    throw invalidRequest("function_call_output.output must be a string or text content array");
+    throw invalidRequest("function_call_output.output must be a string or content array");
   }
-  return output
-    .map((part) => {
-      if (!part || typeof part !== "object" || Array.isArray(part)) {
-        throw invalidRequest("function_call_output.output array items must be text content objects");
-      }
-      const raw = part as Record<string, unknown>;
-      if (raw.type !== "input_text" && raw.type !== "output_text" && raw.type !== "text") {
-        throw invalidRequest(
-          `function_call_output.output must contain only text content; unsupported type: ${String(raw.type)}`,
-        );
-      }
-      if (typeof raw.text !== "string") throw invalidRequest(`${String(raw.type)} tool output requires text`);
-      return raw.text;
-    })
-    .join("\n");
+  const blocks: AnthropicContentBlock[] = [];
+  for (const part of output) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      throw invalidRequest("function_call_output.output array items must be content objects");
+    }
+    const raw = part as Record<string, unknown>;
+    const type = typeof raw.type === "string" ? raw.type : "";
+    if (type === "input_text" || type === "output_text" || type === "text") {
+      if (typeof raw.text !== "string") throw invalidRequest(`${type} tool output requires text`);
+      blocks.push({ type: "text", text: raw.text });
+      continue;
+    }
+    if (type === "input_image" || type === "image_url") {
+      blocks.push(parseInputImage(raw));
+      continue;
+    }
+    throw invalidRequest(
+      `function_call_output.output must contain only text or image content; unsupported type: ${String(raw.type)}`,
+    );
+  }
+  if (blocks.every((block) => block.type === "text")) {
+    return blocks.map((block) => block.text).join("\n");
+  }
+  return blocks;
 }
 
 function parseFunctionCall(raw: Record<string, unknown>): Extract<AnthropicContentBlock, { type: "tool_use" }> {
