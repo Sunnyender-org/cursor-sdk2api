@@ -43,7 +43,7 @@
   "dependencies": {
     "@cursor/sdk": "1.0.30",
     "proxy-agent": "8.0.2",
-    "undici": "8.10.0"
+    "undici": "8.10.2"
   },
   "devDependencies": {
     "@types/node": "22.18.12",
