@@ -59,7 +59,9 @@ test("usage is deferred on tool turns and confirmed once on the final turn", asy
     };
   };
   expect(second.status).toBe(200);
-  expect(final.usage.input_tokens).toBe(11);
+  // Cursor's SDK reports inputTokens as the TOTAL prompt size; Anthropic's
+  // input_tokens excludes the cache fields, so 11 total - 2 cacheRead - 4 cacheWrite.
+  expect(final.usage.input_tokens).toBe(5);
   expect(final.usage.output_tokens).toBe(5);
   expect(final.usage.cache_creation_input_tokens).toBe(4);
   expect(final.usage.cache_read_input_tokens).toBe(2);
